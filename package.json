@@ -9,10 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "recharts": "^3.7.0",
-    "react": "^19.2.3",
+    "@amap/amap-jsapi-loader": "^1.0.1",
     "lucide-react": "^0.562.0",
-    "react-dom": "^19.2.3"
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
