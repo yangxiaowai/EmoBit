@@ -1,5 +1,6 @@
 
 import React, { useEffect, useState, useRef, useCallback } from 'react';
+import * as THREE from 'three';
 import { SimulationType, SystemStatus, MemoryPhoto } from '../types';
 import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as ImageIcon, Volume2, X, CloudSun, Loader2, Navigation, ScanLine, Pill, CheckCircle, ArrowUp, ArrowLeft, ArrowRight, MapPin, Camera, User, ScanFace, Box, AlertCircle, MicOff, Sparkles, Settings, Brain } from 'lucide-react';
 import { speechService, SpeechRecognitionResult } from '../services/speechService';
@@ -13,7 +14,6 @@ import { aiService, AIResponse } from '../services/aiService';
 import { wanderingService } from '../services/wanderingService';
 import { medicationService } from '../services/medicationService';
 import { cognitiveService } from '../services/cognitiveService';
-import SmartAvatar from './SmartAvatar';
 import AvatarCreator from './AvatarCreator';
 import ARNavigationOverlay from './ARNavigationOverlay';
 import WanderingAlert from './WanderingAlert';
@@ -31,6 +31,369 @@ const MOCK_MEMORIES: MemoryPhoto[] = [
     { id: '2', url: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?q=80&w=600&auto=format&fit=crop', date: '1995年 春节', location: '老家院子', story: '这张是大年初一的全家福。大家围在一起包饺子...', tags: ['春节'] },
     { id: '3', url: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?q=80&w=600&auto=format&fit=crop', date: '2010年 夏', location: '上海世博会', story: '这是咱们一家去上海看世博会。中国馆真的好壮观...', tags: ['旅行'] }
 ];
+
+// --- 3D Avatar Component (Real-time Render) ---
+const CuteAvatar3D = ({ isTalking, isListening, isThinking }: { isTalking: boolean, isListening: boolean, isThinking?: boolean }) => {
+    const mountRef = useRef<HTMLDivElement>(null);
+    const stateRef = useRef({ isTalking, isListening, isThinking: !!isThinking });
+    stateRef.current = { isTalking, isListening, isThinking: !!isThinking };
+
+    useEffect(() => {
+        const mount = mountRef.current;
+        if (!mount) return;
+
+        // 确保唯一 canvas：清空可能残留的子节点（如 Strict Mode 或清理未完全执行）
+        while (mount.firstChild) mount.removeChild(mount.firstChild);
+
+        // 1. Setup Scene
+        const scene = new THREE.Scene();
+        
+        // --- Background Decor (Clouds) ---
+        const bgGroup = new THREE.Group();
+        scene.add(bgGroup);
+
+        const createCloud = (x: number, y: number, z: number, scale: number) => {
+            const cloud = new THREE.Group();
+            const cloudMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff, 
+                roughness: 0.9, 
+                flatShading: true, 
+                transparent: true, 
+                opacity: 0.6 
+            });
+            
+            const g1 = new THREE.IcosahedronGeometry(0.5, 0);
+            const m1 = new THREE.Mesh(g1, cloudMat);
+            m1.position.x = -0.4;
+            cloud.add(m1);
+            
+            const g2 = new THREE.IcosahedronGeometry(0.6, 0);
+            const m2 = new THREE.Mesh(g2, cloudMat);
+            cloud.add(m2);
+
+            const g3 = new THREE.IcosahedronGeometry(0.5, 0);
+            const m3 = new THREE.Mesh(g3, cloudMat);
+            m3.position.x = 0.4;
+            cloud.add(m3);
+
+            cloud.position.set(x, y, z);
+            cloud.scale.setScalar(scale);
+            return cloud;
+        };
+
+        const cloud1 = createCloud(-2.5, 2, -3, 0.8);
+        bgGroup.add(cloud1);
+        const cloud2 = createCloud(2.5, 0, -4, 0.6);
+        bgGroup.add(cloud2);
+        const cloud3 = createCloud(-2, -1.5, -3, 0.5);
+        bgGroup.add(cloud3);
+
+        // --- Floating Particles ---
+        const particleCount = 8;
+        const particles: THREE.Mesh[] = [];
+        const particleGeo = new THREE.OctahedronGeometry(0.1, 0);
+        const particleMat = new THREE.MeshBasicMaterial({ color: 0xffe066, transparent: true, opacity: 0.6 });
+        
+        for(let i=0; i<particleCount; i++) {
+            const p = new THREE.Mesh(particleGeo, particleMat);
+            p.position.set(
+                (Math.random() - 0.5) * 5,
+                (Math.random() - 0.5) * 5,
+                (Math.random() - 0.5) * 2 - 1
+            );
+            p.scale.setScalar(Math.random() * 0.5 + 0.5);
+            bgGroup.add(p);
+            particles.push(p);
+        }
+        
+        const camera = new THREE.PerspectiveCamera(50, 300 / 400, 0.1, 1000);
+        camera.position.z = 5;
+        camera.position.y = 0.5;
+
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(300, 400); 
+        renderer.setPixelRatio(window.devicePixelRatio);
+        mount.appendChild(renderer.domElement);
+
+        // 2. Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.1); 
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        dirLight.position.set(5, 5, 5);
+        scene.add(dirLight);
+        
+        const frontLight = new THREE.DirectionalLight(0xffeadd, 0.6); 
+        frontLight.position.set(0, 2, 5);
+        scene.add(frontLight);
+
+        const backLight = new THREE.DirectionalLight(0xffeeb1, 0.5);
+        backLight.position.set(-5, 5, -5);
+        scene.add(backLight);
+
+        // 3. Character Group
+        const characterGroup = new THREE.Group();
+        scene.add(characterGroup);
+
+        // --- Materials ---
+        const skinMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xffe5d8, // Warm Fair Skin Tone
+            emissive: 0x5a3a30,
+            emissiveIntensity: 0.05,
+            roughness: 0.45,
+            metalness: 0.0, 
+            clearcoat: 0.1,
+            reflectivity: 0.5
+        });
+
+        const blackMaterial = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.2 });
+        const eyebrowMaterial = new THREE.MeshStandardMaterial({ color: 0x4a4a4a, roughness: 0.9 });
+        const blushMaterial = new THREE.MeshStandardMaterial({ color: 0xff8a8a, roughness: 1, transparent: true, opacity: 0.4 });
+        const noseMaterial = new THREE.MeshPhysicalMaterial({ color: 0xffd1c2, roughness: 0.5, metalness: 0 }); 
+        const mouthMaterial = new THREE.MeshStandardMaterial({ color: 0xf43f5e, roughness: 0.5 });
+        
+        // New Accessories Materials
+        const scarfMaterial = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.8 }); // Amber Scarf
+        const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x2d241e, roughness: 1.0 }); // Dark Brown Hair (Back to fluffiness)
+
+        // --- Body Parts ---
+        
+        // Head
+        const headGeo = new THREE.SphereGeometry(1.2, 32, 32);
+        const head = new THREE.Mesh(headGeo, skinMaterial);
+        characterGroup.add(head);
+
+        // Body
+        const bodyGeo = new THREE.SphereGeometry(0.8, 32, 32);
+        const body = new THREE.Mesh(bodyGeo, skinMaterial);
+        body.position.y = -1.5;
+        characterGroup.add(body);
+
+        // --- Accessories ---
+
+        // 1. Scarf (Fills gap between head and body)
+        const scarfGeo = new THREE.TorusGeometry(0.85, 0.25, 16, 32);
+        const scarf = new THREE.Mesh(scarfGeo, scarfMaterial);
+        scarf.rotation.x = Math.PI / 2;
+        scarf.position.y = -1.1;
+        characterGroup.add(scarf);
+
+        // 2. Fluffy Hair (Back to Original Puffy Style)
+        const hairGroup = new THREE.Group();
+        head.add(hairGroup); // Move with head
+
+        const hairPuffGeo = new THREE.SphereGeometry(0.45, 16, 16);
+        
+        // Helper to add hair puffs
+        const createPuff = (x: number, y: number, z: number, s: number) => {
+             const m = new THREE.Mesh(hairPuffGeo, hairMaterial);
+             m.position.set(x, y, z);
+             m.scale.setScalar(s);
+             hairGroup.add(m);
+        };
+
+        // Top Main Cloud
+        createPuff(0, 1.35, 0, 1.9);
+        
+        // Side Clouds (Upper)
+        createPuff(-0.8, 1.1, 0.3, 1.4);
+        createPuff(0.8, 1.1, 0.3, 1.4);
+        
+        // Side Clouds (Lower - kept away from face to not block eyes)
+        createPuff(-1.1, 0.7, -0.2, 1.3);
+        createPuff(1.1, 0.7, -0.2, 1.3);
+
+        // Back Volume
+        createPuff(0, 0.6, -0.9, 2.0);
+        createPuff(-0.7, 1.0, -0.6, 1.5);
+        createPuff(0.7, 1.0, -0.6, 1.5);
+
+        // Front subtle volume (bangs) - kept high
+        createPuff(0, 1.35, 0.5, 1.1); 
+
+        // --- Face Features ---
+
+        // Eyes
+        const eyeGeo = new THREE.SphereGeometry(0.12, 16, 16);
+        const leftEye = new THREE.Mesh(eyeGeo, blackMaterial);
+        leftEye.position.set(-0.4, 0.15, 1.08);
+        leftEye.scale.set(1, 1.4, 1);
+        head.add(leftEye);
+
+        const rightEye = new THREE.Mesh(eyeGeo, blackMaterial);
+        rightEye.position.set(0.4, 0.15, 1.08);
+        rightEye.scale.set(1, 1.4, 1);
+        head.add(rightEye);
+
+        // Eyebrows
+        const browGeo = new THREE.CapsuleGeometry(0.03, 0.25, 4, 8);
+        const leftBrow = new THREE.Mesh(browGeo, eyebrowMaterial);
+        leftBrow.position.set(-0.4, 0.45, 1.12);
+        leftBrow.rotation.set(0, 0, 1.7);
+        head.add(leftBrow);
+
+        const rightBrow = new THREE.Mesh(browGeo, eyebrowMaterial);
+        rightBrow.position.set(0.4, 0.45, 1.12);
+        rightBrow.rotation.set(0, 0, -1.7);
+        head.add(rightBrow);
+
+        // Nose
+        const noseGeo = new THREE.SphereGeometry(0.1, 16, 16);
+        const nose = new THREE.Mesh(noseGeo, noseMaterial);
+        nose.position.set(0, 0.0, 1.18);
+        head.add(nose);
+
+        // Mouth
+        const mouthGeo = new THREE.TorusGeometry(0.06, 0.03, 8, 16, Math.PI * 2); 
+        const mouth = new THREE.Mesh(mouthGeo, mouthMaterial);
+        mouth.position.set(0, -0.25, 1.14);
+        // Initial neutral state
+        mouth.scale.set(1, 0.5, 1);
+        head.add(mouth);
+
+        // Blush
+        const blushGeo = new THREE.CircleGeometry(0.2, 32);
+        const leftBlush = new THREE.Mesh(blushGeo, blushMaterial);
+        leftBlush.position.set(-0.7, -0.1, 1.0);
+        leftBlush.rotation.y = -0.5;
+        head.add(leftBlush);
+
+        const rightBlush = new THREE.Mesh(blushGeo, blushMaterial);
+        rightBlush.position.set(0.7, -0.1, 1.0);
+        rightBlush.rotation.y = 0.5;
+        head.add(rightBlush);
+
+        // Ears
+        const earGeo = new THREE.SphereGeometry(0.25, 32, 32);
+        const leftEar = new THREE.Mesh(earGeo, skinMaterial);
+        leftEar.position.set(-1.18, 0.1, 0);
+        leftEar.scale.z = 0.5;
+        head.add(leftEar);
+        
+        const rightEar = new THREE.Mesh(earGeo, skinMaterial);
+        rightEar.position.set(1.18, 0.1, 0);
+        rightEar.scale.z = 0.5;
+        head.add(rightEar);
+        
+
+        // 4. Animation Loop
+        let frameId: number;
+        const clock = new THREE.Clock();
+        
+        const animate = () => {
+            frameId = requestAnimationFrame(animate);
+            const t = clock.getElapsedTime();
+
+            // Background Animation
+            cloud1.position.y = 2 + Math.sin(t * 0.3) * 0.2;
+            cloud1.rotation.y = Math.sin(t * 0.1) * 0.1;
+            
+            cloud2.position.y = 0 + Math.sin(t * 0.4 + 2) * 0.2;
+            cloud2.rotation.z = Math.sin(t * 0.05) * 0.05;
+
+            cloud3.position.y = -1.5 + Math.sin(t * 0.2 + 4) * 0.1;
+
+            // Particles Animation
+            particles.forEach((p, i) => {
+                p.position.y += Math.sin(t + i) * 0.005;
+                p.rotation.x += 0.01;
+                p.rotation.y += 0.01;
+            });
+
+            // Character Animation
+            characterGroup.position.y = Math.sin(t * 1.5) * 0.05;
+            body.scale.x = 1 + Math.sin(t * 1.5) * 0.01;
+
+            characterGroup.rotation.y = Math.sin(t * 0.5) * 0.08; 
+            characterGroup.rotation.x = Math.sin(t * 0.3) * 0.03;
+
+            // Scarf subtle movement
+            scarf.rotation.z = Math.sin(t * 1.5) * 0.05;
+
+            // Hair bounce effect
+            hairGroup.scale.y = 1 + Math.sin(t * 3) * 0.02;
+
+            const { isTalking: talking, isListening: listening, isThinking: thinking } = stateRef.current;
+            if (talking) {
+                const talkFreq = 18;
+                const mouthOpenAmount = (Math.sin(t * talkFreq) + Math.sin(t * talkFreq * 0.8)) * 0.5;
+                head.position.y = Math.sin(t * 12) * 0.02;
+                const mouthScaleY = 0.5 + Math.max(0, mouthOpenAmount + 0.3) * 0.8; 
+                const mouthScaleX = 1.0 - Math.max(0, mouthOpenAmount) * 0.15;
+                mouth.scale.set(mouthScaleX, mouthScaleY, 1);
+            } else {
+                head.position.y = THREE.MathUtils.lerp(head.position.y, 0, 0.1);
+                mouth.scale.set(1, 0.5, 1);
+            }
+
+            if (listening || thinking) {
+                characterGroup.rotation.z = THREE.MathUtils.lerp(characterGroup.rotation.z, 0.1, 0.1);
+                characterGroup.rotation.x = THREE.MathUtils.lerp(characterGroup.rotation.x, 0.15, 0.1);
+            } else {
+                characterGroup.rotation.z = THREE.MathUtils.lerp(characterGroup.rotation.z, 0, 0.1);
+                characterGroup.rotation.x = THREE.MathUtils.lerp(characterGroup.rotation.x, 0, 0.1);
+            }
+
+            if (Math.random() > 0.995) {
+                leftEye.scale.y = 0.1;
+                rightEye.scale.y = 0.1;
+            } else {
+                leftEye.scale.y += (1.4 - leftEye.scale.y) * 0.2;
+                rightEye.scale.y += (1.4 - rightEye.scale.y) * 0.2;
+            }
+
+            renderer.render(scene, camera);
+        };
+
+        animate();
+
+        // Cleanup
+        return () => {
+            cancelAnimationFrame(frameId);
+            try {
+                if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+            } catch (_) { /* already removed */ }
+            // Dispose geometries
+            headGeo.dispose();
+            bodyGeo.dispose();
+            scarfGeo.dispose();
+            hairPuffGeo.dispose();
+            eyeGeo.dispose();
+            browGeo.dispose();
+            noseGeo.dispose();
+            mouthGeo.dispose();
+            blushGeo.dispose();
+            earGeo.dispose();
+            particleGeo.dispose();
+            // Dispose materials
+            skinMaterial.dispose();
+            blackMaterial.dispose();
+            eyebrowMaterial.dispose();
+            blushMaterial.dispose();
+            noseMaterial.dispose();
+            mouthMaterial.dispose();
+            scarfMaterial.dispose();
+            hairMaterial.dispose();
+            particleMat.dispose();
+            // Traverse scene to dispose all materials and geometries
+            scene.traverse((object) => {
+                if (object instanceof THREE.Mesh) {
+                    if (object.geometry) object.geometry.dispose();
+                    if (object.material) {
+                        if (Array.isArray(object.material)) {
+                            object.material.forEach((mat) => mat.dispose());
+                        } else {
+                            object.material.dispose();
+                        }
+                    }
+                }
+            });
+            renderer.dispose();
+        };
+    }, []); // 仅挂载时创建，避免重复 canvas；状态通过 stateRef 更新
+
+    return <div ref={mountRef} className="w-[300px] h-[400px] cursor-pointer active:scale-95 transition-transform" />;
+};
 
 // --- Sub-Components (Full Screen Scenarios) ---
 
@@ -820,7 +1183,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 <div className={`w-full h-full flex flex-col relative transition-all duration-700 overflow-hidden bg-gradient-to-b from-indigo-50 to-white ${activeScenario !== 'none' ? 'opacity-0 pointer-events-none scale-95' : 'opacity-100 scale-100'}`}>
 
                     {/* Header */}
-                    <div className="w-full px-8 pt-14 mb-6 flex justify-between items-end relative z-10 animate-fade-in-up">
+                    <div className="w-full px-8 pt-14 pb-2 flex justify-between items-end relative z-10 animate-fade-in-up shrink-0">
                         <div className="flex flex-col">
                             <span className="text-5xl font-black text-slate-800 tracking-tighter leading-none">{time}</span>
                             <span className="text-sm font-bold text-slate-500 mt-2 pl-1 tracking-widest uppercase">{dateStr}</span>
@@ -831,135 +1194,115 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                         </div>
                     </div>
 
-                    {/* 3D Avatar Container with Health Visualization */}
-                    <div className="flex-1 flex flex-col items-center justify-center -mt-10">
-                        <div className="relative w-64 h-72 perspective-1000 group">
-
-                            {/* 使用智能头像组件 */}
-                            <SmartAvatar
-                                customImageUrl={customAvatarUrl || undefined}
-                                isTalking={isTalking}
-                                isListening={isListening}
-                                isThinking={isThinking}
-                                size="large"
-                                showStatus={false}
-                                onClick={() => setShowAvatarCreator(true)}
-                            />
-
-                            {/* 警告状态指示 */}
-                            {status === SystemStatus.WARNING && (
-                                <div className="absolute -top-2 -right-2 w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center animate-pulse">
-                                    <AlertCircle size={14} className="text-white" />
-                                </div>
-                            )}
-
-                            {/* 记忆唤醒提示 */}
-                            {memoryEvent && (
-                                <div className="absolute -top-16 left-1/2 -translate-x-1/2 bg-indigo-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg animate-bounce whitespace-nowrap">
-                                    📍 {memoryEvent.anchor.name}
-                                </div>
-                            )}
-
-                            {/* Platform */}
-                            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-48 h-12 bg-black/5 rounded-[100%] blur-sm transform scale-x-150"></div>
+                    {/* 单个动态 3D 数字人居中（仅此一处渲染，无静态重复） */}
+                    <div className="flex-1 flex items-center justify-center relative min-h-0 -mt-8 overflow-hidden">
+                        <div className="relative flex items-center justify-center group cursor-pointer" onClick={() => setShowAvatarCreator(true)}>
+                            <div className="transform scale-90 shrink-0">
+                                <CuteAvatar3D 
+                                    isTalking={isTalking} 
+                                    isListening={isListening}
+                                    isThinking={isThinking}
+                                />
+                            </div>
+                            {/* Platform Shadow */}
+                            <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-40 h-8 bg-black/10 rounded-[100%] blur-md transform scale-x-150 z-[-1] animate-shadow-breath" />
                         </div>
 
-
-                        {/* Main Dialogue Box */}
-                        <div className="px-6 w-full relative z-10 mt-6">
-                            <div className="bg-white/80 backdrop-blur-xl p-5 rounded-2xl rounded-tl-none shadow-sm border border-white/50 animate-fade-in-up min-h-[80px] flex items-center relative">
-                                <div className="flex-1 max-h-48 overflow-y-auto pr-1 scrollbar-hide">
-                                    <div className="flex items-center gap-2 mb-2 text-indigo-600 text-xs font-bold uppercase tracking-wider sticky top-0 bg-white/0 backdrop-blur-sm z-10">
-                                        {isListening && <Mic size={12} className="animate-pulse" />}
-                                        {isThinking && <Loader2 size={12} className="animate-spin" />}
-                                        {!isListening && !isThinking && <Volume2 size={12} />}
-                                        {isListening ? "正在聆听..." : isThinking ? "思考中..." : "AI 陪伴助手"}
-                                    </div>
-
-                                    {/* Dynamic Text Switching */}
-                                    {voiceInputDisplay ? (
-                                        <p className="text-slate-800 text-lg font-bold leading-relaxed animate-pulse">
-                                            "{voiceInputDisplay}"
-                                        </p>
-                                    ) : (
-                                        <div className="text-slate-700 text-lg font-medium leading-relaxed whitespace-pre-wrap">
-                                            {aiMessage}
-                                        </div>
-                                    )}
-                                    <div ref={messagesEndRef} />
-                                </div>
-
-                                {/* 创建头像按钮 - 移到对话框角落 */}
-                                <button
-                                    onClick={() => setShowAvatarCreator(true)}
-                                    className="absolute -top-3 -right-3 w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-full shadow-lg flex items-center justify-center text-white hover:scale-110 transition-transform z-20"
-                                    title="创建我的数字分身"
-                                >
-                                    <Sparkles size={14} />
-                                </button>
+                        {/* 警告状态指示 */}
+                        {status === SystemStatus.WARNING && (
+                            <div className="absolute top-4 right-6 w-6 h-6 bg-amber-500 rounded-full flex items-center justify-center animate-pulse z-50">
+                                <AlertCircle size={14} className="text-white" />
                             </div>
+                        )}
+
+                        {/* 记忆唤醒提示 */}
+                        {memoryEvent && (
+                            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-indigo-500 text-white px-4 py-2 rounded-full text-sm font-medium shadow-lg animate-bounce whitespace-nowrap z-50">
+                                📍 {memoryEvent.anchor.name}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 紧凑对话条：AI 陪伴助手 + 创建头像，位于导航栏上方 */}
+                    <div className="shrink-0 px-4 pb-2 relative z-10">
+                        <div className="bg-white/80 backdrop-blur-xl py-3 px-4 rounded-2xl shadow-sm border border-white/50 flex items-center gap-3 min-h-[56px]">
+                            <div className="flex items-center gap-2 text-indigo-600 text-xs font-bold uppercase tracking-wider flex-shrink-0">
+                                {isListening && <Mic size={12} className="animate-pulse" />}
+                                {isThinking && <Loader2 size={12} className="animate-spin" />}
+                                {!isListening && !isThinking && <Volume2 size={12} />}
+                                {isListening ? "正在聆听..." : isThinking ? "思考中..." : "AI 陪伴助手"}
+                            </div>
+                            <div className="flex-1 min-w-0 overflow-hidden">
+                                {voiceInputDisplay ? (
+                                    <p className="text-slate-800 text-sm font-bold truncate">"{voiceInputDisplay}"</p>
+                                ) : (
+                                    <p className="text-slate-700 text-sm font-medium truncate">{aiMessage}</p>
+                                )}
+                                <div ref={messagesEndRef} />
+                            </div>
+                            <button
+                                onClick={() => setShowAvatarCreator(true)}
+                                className="w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-full shadow flex items-center justify-center text-white hover:scale-110 transition-transform flex-shrink-0"
+                                title="创建我的数字分身"
+                            >
+                                <Sparkles size={14} />
+                            </button>
                         </div>
                     </div>
 
-                    {/* Bottom Dock */}
+                    {/* 导航栏：相册 / 麦克风 / 服药 — 固定在屏幕底部 */}
                     {activeScenario === 'none' && (
-                        <div className="absolute bottom-6 left-4 right-4 h-20 bg-white/20 backdrop-blur-2xl rounded-3xl border border-white/20 flex items-center justify-around px-2 shadow-lg z-40 animate-slide-up">
+                        <div className="absolute bottom-0 left-0 right-0 pt-3 pb-6 px-4 bg-gradient-to-t from-white/30 to-transparent z-40">
+                            <div className="h-20 bg-white/20 backdrop-blur-2xl rounded-3xl border border-white/20 flex items-center justify-around px-2 shadow-lg">
 
-                            {/* Memory Button (Left) */}
-                            <button
-                                className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
-                                onClick={() => {
-                                    setAiMessage("好的，让我们一起翻翻老照片。");
-                                    setIsTalking(true);
-                                    setTimeout(() => {
-                                        setIsTalking(false);
-                                        setActiveScenario('memory');
-                                    }, 800);
-                                }}
-                            >
-                                <div className="w-10 h-10 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-indigo-500/50 transition-all">
-                                    <ImageIcon size={20} className="text-white" />
-                                </div>
-                                <span className="text-[10px] font-medium opacity-80">相册</span>
-                            </button>
-
-                            {/* Main Voice Button (Floating Center) */}
-                            <div className="relative -top-6">
                                 <button
-                                    onClick={toggleRecording}
-                                    className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center text-white border-4 border-slate-900 transition-all duration-300 ${isRecording
-                                        ? 'bg-gradient-to-br from-red-500 to-rose-600 scale-110 animate-pulse'
-                                        : 'bg-gradient-to-br from-indigo-600 to-violet-600'
-                                        }`}
+                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
+                                    onClick={() => {
+                                        setAiMessage("好的，让我们一起翻翻老照片。");
+                                        setIsTalking(true);
+                                        setTimeout(() => {
+                                            setIsTalking(false);
+                                            setActiveScenario('memory');
+                                        }, 800);
+                                    }}
                                 >
-                                    {isRecording ? (
-                                        <div className="flex gap-1">
-                                            <div className="w-1 h-3 bg-white rounded-full animate-bounce"></div>
-                                            <div className="w-1 h-5 bg-white rounded-full animate-bounce delay-150"></div>
-                                            <div className="w-1 h-3 bg-white rounded-full animate-bounce delay-75"></div>
-                                        </div>
-                                    ) : <Mic size={28} />}
+                                    <div className="w-10 h-10 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-indigo-500/50 transition-all">
+                                        <ImageIcon size={20} className="text-white" />
+                                    </div>
+                                    <span className="text-[10px] font-medium opacity-80">相册</span>
                                 </button>
-                            </div>
 
-                            {/* Meds Button (Right) */}
-                            <button
-                                className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
-                                onClick={() => {
-                                    medicationService.simulateReminder();
-                                }}
-                            >
-                                <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-emerald-500/50 transition-all">
-                                    <Pill size={20} className="text-white" />
+                                <div className="flex items-center justify-center">
+                                    <button
+                                        onClick={toggleRecording}
+                                        className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center text-white border-4 border-slate-900 transition-all duration-300 ${isRecording
+                                            ? 'bg-gradient-to-br from-red-500 to-rose-600 scale-110 animate-pulse'
+                                            : 'bg-gradient-to-br from-indigo-600 to-violet-600'
+                                            }`}
+                                    >
+                                        {isRecording ? (
+                                            <div className="flex gap-1">
+                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce"></div>
+                                                <div className="w-1 h-5 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce" style={{ animationDelay: '75ms' }}></div>
+                                            </div>
+                                        ) : <Mic size={28} />}
+                                    </button>
                                 </div>
-                                <span className="text-[10px] font-medium opacity-80">服药</span>
-                            </button>
 
+                                <button
+                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
+                                    onClick={() => medicationService.simulateReminder()}
+                                >
+                                    <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-emerald-500/50 transition-all">
+                                        <Pill size={20} className="text-white" />
+                                    </div>
+                                    <span className="text-[10px] font-medium opacity-80">服药</span>
+                                </button>
+
+                            </div>
                         </div>
                     )}
-
-                    {/* Home Indicator */}
-                    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-32 h-1 bg-white/20 rounded-full z-[60]"></div>
 
                 </div> {/* Close HomeScreen */}
 
@@ -1031,6 +1374,18 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 )}
 
             </div>
+
+            <style>{`
+                @keyframes shadowBreath { 0%, 100% { transform: translateX(-50%) scaleX(1.5) scaleY(1); opacity: 0.1; } 50% { transform: translateX(-50%) scaleX(1.4) scaleY(0.9); opacity: 0.05; } }
+                @keyframes waveMic { 0%, 100% { height: 8px; } 50% { height: 24px; } }
+                @keyframes beat { 0%, 100% { transform: scale(1); opacity: 0.5; } 50% { transform: scale(1.3); opacity: 0.8; } }
+                .animate-shadow-breath { animation: shadowBreath 5s ease-in-out infinite; }
+                .animate-wave-mic { animation: waveMic 1s ease-in-out infinite; }
+                .animate-beat { animation: beat 1s ease-in-out infinite; }
+                .animate-fade-in-up { animation: fadeInUp 0.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+                .perspective-1000 { perspective: 1000px; }
+                @keyframes fadeInUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+            `}</style>
         </div>
     );
 };
