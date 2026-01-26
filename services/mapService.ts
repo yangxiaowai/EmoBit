@@ -1,9 +1,17 @@
 /**
  * 高德地图导航服务
  * 使用高德地图 JS API 实现路线规划和导航
+ * 
+ * 注意：当前暂时禁用地图功能（缺少 @amap/amap-jsapi-loader 依赖）
+ * 所有方法将返回失败结果，不影响其他功能测试
  */
 
-import AMapLoader from '@amap/amap-jsapi-loader';
+// 暂时禁用地图导入，避免启动错误
+// import AMapLoader from '@amap/amap-jsapi-loader';
+const MAP_SERVICE_DISABLED = true; // 设置为 false 以启用地图功能
+let AMapLoader: any = null;
+
+// 如果启用地图功能，取消注释上面的 import 并设置 MAP_SERVICE_DISABLED = false
 
 // 类型定义
 export interface LngLat {
@@ -81,6 +89,12 @@ class MapService {
      * 初始化高德地图SDK
      */
     async init(): Promise<boolean> {
+        // 如果地图功能已禁用，直接返回 false
+        if (MAP_SERVICE_DISABLED || !AMapLoader) {
+            console.warn('[MapService] 地图功能已禁用');
+            return false;
+        }
+
         if (this.isInitialized && this.AMap) {
             return true;
         }

@@ -5,7 +5,10 @@ import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as I
 import { speechService, SpeechRecognitionResult } from '../services/speechService';
 import { mapService, RouteResult, RouteStep } from '../services/mapService';
 import { memoryService, LocationEvent } from '../services/memoryService';
+import { VoiceService } from '../services/api';
 import { edgeTTSService } from '../services/ttsService';
+import { voiceSelectionService } from '../services/voiceSelectionService';
+import { voiceCloneService } from '../services/voiceCloneService';
 import { aiService, AIResponse } from '../services/aiService';
 import { wanderingService } from '../services/wanderingService';
 import { medicationService } from '../services/medicationService';
@@ -261,43 +264,39 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
     const playNarration = useCallback(() => {
         setIsSpeaking(true);
         const textToSpeak = `${photo.location}。${photo.story}`;
-        edgeTTSService.speak(textToSpeak, 'xiaoxiao', () => {
-            setIsSpeaking(false);
-        }).catch(() => setIsSpeaking(false));
+        VoiceService.speak(textToSpeak, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
     }, [photo]);
 
     // 初次进入时自动播放第一张
     useEffect(() => {
         playNarration();
         return () => {
-            edgeTTSService.stop();
+            VoiceService.stop();
         };
     }, []);
 
     // 切换照片时停止当前语音
     const handlePrev = () => {
-        edgeTTSService.stop();
+        VoiceService.stop();
         setIsSpeaking(false);
         onPrev();
-        // 延迟播放新照片的语音
         setTimeout(() => {
             const prevIndex = (step - 1 + MOCK_MEMORIES.length) % MOCK_MEMORIES.length;
             const prevPhoto = MOCK_MEMORIES[prevIndex];
             setIsSpeaking(true);
-            edgeTTSService.speak(`${prevPhoto.location}。${prevPhoto.story}`, 'xiaoxiao', () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
+            VoiceService.speak(`${prevPhoto.location}。${prevPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
     };
 
     const handleNext = () => {
-        edgeTTSService.stop();
+        VoiceService.stop();
         setIsSpeaking(false);
         onNext();
-        // 延迟播放新照片的语音
         setTimeout(() => {
             const nextIndex = (step + 1) % MOCK_MEMORIES.length;
             const nextPhoto = MOCK_MEMORIES[nextIndex];
             setIsSpeaking(true);
-            edgeTTSService.speak(`${nextPhoto.location}。${nextPhoto.story}`, 'xiaoxiao', () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
+            VoiceService.speak(`${nextPhoto.location}。${nextPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
     };
 
@@ -413,6 +412,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     // Avatar State
     const [isTalking, setIsTalking] = useState(false);
     const [isListening, setIsListening] = useState(false);
+    const [isThinking, setIsThinking] = useState(false);
     const [aiMessage, setAiMessage] = useState("张爷爷，我在呢。有什么想聊的吗？");
 
     // 语音识别状态
@@ -443,6 +443,51 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         }
     }, [aiMessage, voiceInputDisplay, isTalking]);
 
+    // Edge 预生成：确认音「嗯」等
+    useEffect(() => {
+        edgeTTSService.preload(['嗯']).catch(() => {});
+    }, []);
+
+    // 克隆常用句预拉：等待服务端模型就绪后再触发（避免过早请求导致错误）
+    // 服务端会在模型加载完成后自动预加载，这里只做补充（如果前端有新的常用句）
+    useEffect(() => {
+        const preloadWhenReady = async () => {
+            try {
+                // 等待服务就绪（最多等待 5 秒）
+                const maxWait = 5000;
+                const start = Date.now();
+                let status = await voiceCloneService.checkStatus();
+                
+                while (!status.modelReady && Date.now() - start < maxWait) {
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    status = await voiceCloneService.checkStatus();
+                }
+                
+                if (status.modelReady) {
+                    const id = voiceSelectionService.getSelectedVoiceId();
+                    if (id?.startsWith('cloned_')) {
+                        console.log('[ElderlyApp] 服务已就绪，补充预加载克隆常用句（服务端已自动预加载）');
+                        // 服务端已自动预加载，这里只做补充（如果有新的常用句）
+                        // VoiceService.preloadClonePhrases(id);
+                        
+                        // 可选：进入老人端时自动播放问候语（如果已选中克隆音色）
+                        // 延迟 1 秒，确保服务完全就绪
+                        setTimeout(() => {
+                            const greeting = '你好，我是你的数字人助手';
+                            VoiceService.speak(greeting, id, undefined, undefined).catch(() => {});
+                        }, 1000);
+                    }
+                } else {
+                    console.warn('[ElderlyApp] 服务未就绪，跳过预加载（服务端会自动预加载）');
+                }
+            } catch (error) {
+                console.warn('[ElderlyApp] 预加载检查失败:', error);
+            }
+        };
+        
+        preloadWhenReady();
+    }, []);
+
     // Clock
     useEffect(() => {
         const updateTime = () => {
@@ -464,7 +509,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
             setIsTalking(true);
 
             // 使用TTS播报
-            edgeTTSService.speak(dialogue).catch(console.error);
+            VoiceService.speak(dialogue).catch(console.error);
 
             // 3秒后清除事件
             setTimeout(() => {
@@ -625,28 +670,25 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         speechService.stopRecognition();
         setIsListening(false);
 
-        // 显示用户说的话
         setVoiceInputDisplay(result.text);
+        setIsThinking(true);
+        edgeTTSService.speak('嗯', 'xiaoxiao').catch(() => {});
 
         try {
-            // 调用AI大模型获取智能回复
             const response = await aiService.chat(result.text);
 
-            // 清除用户话并显示AI回复
             setVoiceInputDisplay(null);
             setAiMessage(response.text);
+            setIsThinking(false);
             setIsTalking(true);
 
-            // 使用TTS语音回复
-            edgeTTSService.speak(response.text).catch(console.error);
+            VoiceService.speakSegments(response.text, undefined, undefined, () => setIsTalking(false)).catch(() => setIsTalking(false));
 
             // 记录对话用于认知评估
             cognitiveService.recordConversation(result.text, response.text);
 
-            // 如果AI建议触发某个动作场景
             if (response.shouldTriggerAction) {
                 setTimeout(() => {
-                    setIsTalking(false);
                     switch (response.shouldTriggerAction) {
                         case 'nav':
                             const destMatch = result.text.match(/去(.+?)(?:怎么走|$)/);
@@ -666,15 +708,14 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                             break;
                     }
                 }, 2500);
-            } else {
-                setTimeout(() => setIsTalking(false), 2500);
             }
         } catch (error) {
             console.error('AI服务错误:', error);
+            setIsThinking(false);
             setVoiceInputDisplay(null);
             setAiMessage('抱歉，我没太听清楚，您能再说一遍吗？');
             setIsTalking(true);
-            setTimeout(() => setIsTalking(false), 2000);
+            VoiceService.speakSegments('抱歉，我没太听清楚，您能再说一遍吗？', undefined, undefined, () => setIsTalking(false)).catch(() => setIsTalking(false));
         }
     }, []);
 
@@ -768,7 +809,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                         step={step}
                         onClose={() => {
                             setActiveScenario('none');
-                            edgeTTSService.stop();
+                            VoiceService.stop();
                         }}
                         onPrev={() => setStep(prev => Math.max(0, prev - 1))}
                         onNext={() => setStep(prev => prev + 1)}
@@ -799,6 +840,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                                 customImageUrl={customAvatarUrl || undefined}
                                 isTalking={isTalking}
                                 isListening={isListening}
+                                isThinking={isThinking}
                                 size="large"
                                 showStatus={false}
                                 onClick={() => setShowAvatarCreator(true)}
@@ -828,8 +870,10 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                             <div className="bg-white/80 backdrop-blur-xl p-5 rounded-2xl rounded-tl-none shadow-sm border border-white/50 animate-fade-in-up min-h-[80px] flex items-center relative">
                                 <div className="flex-1 max-h-48 overflow-y-auto pr-1 scrollbar-hide">
                                     <div className="flex items-center gap-2 mb-2 text-indigo-600 text-xs font-bold uppercase tracking-wider sticky top-0 bg-white/0 backdrop-blur-sm z-10">
-                                        {isListening ? <Mic size={12} className="animate-pulse" /> : <Volume2 size={12} />}
-                                        {isListening ? "正在聆听..." : "AI 陪伴助手"}
+                                        {isListening && <Mic size={12} className="animate-pulse" />}
+                                        {isThinking && <Loader2 size={12} className="animate-spin" />}
+                                        {!isListening && !isThinking && <Volume2 size={12} />}
+                                        {isListening ? "正在聆听..." : isThinking ? "思考中..." : "AI 陪伴助手"}
                                     </div>
 
                                     {/* Dynamic Text Switching */}

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Pill, Clock, Check, AlarmClock, X, Droplets, AlertCircle } from 'lucide-react';
 import { medicationService, MedicationReminder as ReminderType, MedicationEvent, Medication } from '../services/medicationService';
-import { edgeTTSService } from '../services/ttsService';
 
 interface MedicationReminderProps {
     onTaken?: () => void;

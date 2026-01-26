@@ -47,6 +47,9 @@ export interface VoiceProfile {
   name: string;
   previewUrl?: string;
   status: 'processing' | 'ready' | 'failed';
+  // 语音克隆相关
+  isCloned?: boolean; // 是否为克隆声音
+  voiceId?: string; // 克隆声音ID（用于voiceCloneService）
 }
 
 export interface AvatarModel {

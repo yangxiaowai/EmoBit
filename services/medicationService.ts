@@ -3,7 +3,7 @@
  * 管理老人的用药提醒、记录和统计
  */
 
-import { edgeTTSService } from './ttsService';
+import { VoiceService } from './api';
 
 // 药物信息
 export interface Medication {
@@ -233,7 +233,7 @@ class MedicationService {
 
         // 语音提醒
         const message = `张爷爷，现在是${scheduledTime}，该吃${medication.name}了。${medication.dosage}，${medication.instructions}。`;
-        edgeTTSService.speak(message).catch(console.error);
+        VoiceService.speak(message).catch(console.error);
 
         // 通知订阅者
         this.notify({
@@ -269,7 +269,7 @@ class MedicationService {
         this.saveLogs();
 
         // 语音确认
-        edgeTTSService.speak('好的，已记录您服药了。记得多喝水哦~').catch(console.error);
+        VoiceService.speak('好的，已记录您服药了。记得多喝水哦~').catch(console.error);
 
         // 通知订阅者
         this.notify({
@@ -292,7 +292,7 @@ class MedicationService {
         this.activeReminder.snoozeCount++;
         this.activeReminder.isActive = false;
 
-        edgeTTSService.speak(`好的，${minutes}分钟后再提醒您。`).catch(console.error);
+        VoiceService.speak(`好的，${minutes}分钟后再提醒您。`).catch(console.error);
 
         this.notify({
             type: 'snooze',

@@ -1,7 +1,9 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { SimulationType, SystemStatus, LogEntry, DashboardTab } from '../types';
-import { VoiceService, AvatarService } from '../services/api'; // Import Services
+import { VoiceService, AvatarService } from '../services/api';
+import { voiceSelectionService } from '../services/voiceSelectionService';
+import { blobToWav, getAudioDurationSeconds } from '../utils/audioUtils';
 import { healthStateService, HealthMetrics } from '../services/healthStateService';
 import { mapService } from '../services/mapService';
 import { ShieldCheck, MapPin, Heart, Pill, AlertTriangle, Phone, Activity, Clock, User, Calendar, LayoutGrid, FileText, Settings, ChevronRight, Eye, Brain, Layers, Play, Pause, SkipBack, SkipForward, History, AlertCircle, Signal, Wifi, Battery, Moon, Footprints, Sun, Cloud, ArrowLeft, Mic, Upload, Sparkles, CheckCircle, Volume2, ToggleRight, Loader2, ScanFace, Box, Wand2 } from 'lucide-react';
@@ -221,48 +223,211 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
     // --- Sub-Components ---
 
+    const MIN_RECORDING_SECONDS = 10;
+
     const SettingsView = () => {
         // Voice Clone State
         const [cloneStep, setCloneStep] = useState<'idle' | 'recording' | 'processing' | 'done'>('idle');
         const [voiceProgress, setVoiceProgress] = useState(0);
+        const [clonedVoiceName, setClonedVoiceName] = useState<string>('');
+        const [clonedVoiceId, setClonedVoiceId] = useState<string | null>(null);
+        const [isRecording, setIsRecording] = useState(false);
+        const [recordedAudio, setRecordedAudio] = useState<Blob | null>(null);
+        const [recordingSeconds, setRecordingSeconds] = useState(0);
+        const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+        const audioChunksRef = useRef<Blob[]>([]);
+        const fileInputRef = useRef<HTMLInputElement>(null);
+        const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+        const recordingSecondsRef = useRef(0);
+
+        // 已存储的克隆音色列表 & 当前选中
+        const [clonedVoices, setClonedVoices] = useState<{ id: string; name: string }[]>([]);
+        const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(() =>
+            voiceSelectionService.getSelectedVoiceId()
+        );
 
         // 3D Avatar Generation State
         const [avatarStep, setAvatarStep] = useState<'idle' | 'uploading' | 'scanning' | 'rigging' | 'rendering' | 'done'>('idle');
         const [avatarProgress, setAvatarProgress] = useState(0);
         const [generatedAvatarUrl, setGeneratedAvatarUrl] = useState<string | null>(null);
 
-        // Use the Service Layer
-        const handleStartVoiceClone = async () => {
-            setCloneStep('recording');
+        // 加载已存储克隆音色 & 订阅选中变化
+        const loadVoices = async () => {
+            const all = await VoiceService.getAllVoices();
+            const cloned = all.filter((v) => v.isCloned).map((v) => ({ id: v.id, name: v.name }));
+            setClonedVoices(cloned);
+        };
 
-            // Simulate recording time (In real app, use MediaRecorder API here)
-            setTimeout(async () => {
-                setCloneStep('processing');
+        useEffect(() => {
+            loadVoices();
+            const unsub = voiceSelectionService.subscribe((id) => setSelectedVoiceId(id));
+            return unsub;
+        }, []);
 
-                // Call API Service
-                // Create a dummy blob for now
-                const dummyBlob = new Blob([""], { type: "audio/wav" });
+        // 开始录音
+        const handleStartRecording = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const mr = new MediaRecorder(stream);
+                mediaRecorderRef.current = mr;
+                audioChunksRef.current = [];
+                recordingSecondsRef.current = 0;
+                setRecordingSeconds(0);
 
-                try {
-                    // Initiate cloning
-                    const result = await VoiceService.cloneVoice(dummyBlob, "Grandpa's Voice");
+                mr.ondataavailable = (e) => {
+                    if (e.data.size > 0) audioChunksRef.current.push(e.data);
+                };
 
-                    // Simulate progress bar based on status
-                    let p = 0;
-                    const interval = setInterval(() => {
-                        p += 10;
-                        if (p > 100) {
-                            clearInterval(interval);
-                            setCloneStep('done');
-                        } else {
-                            setVoiceProgress(p);
-                        }
-                    }, 200);
-                } catch (e) {
-                    console.error("Voice cloning failed", e);
-                    setCloneStep('idle');
+                mr.onstop = async () => {
+                    stream.getTracks().forEach((t) => t.stop());
+                    const raw = new Blob(audioChunksRef.current, {
+                        type: mr.mimeType || 'audio/webm',
+                    });
+                    try {
+                        const wav = await blobToWav(raw);
+                        setRecordedAudio(wav);
+                    } catch (e) {
+                        console.error('转 WAV 失败', e);
+                        setRecordedAudio(raw);
+                    }
+                };
+
+                mr.start();
+                setIsRecording(true);
+                setCloneStep('recording');
+                recordingTimerRef.current = setInterval(() => {
+                    recordingSecondsRef.current += 1;
+                    setRecordingSeconds(recordingSecondsRef.current);
+                }, 1000);
+            } catch (err) {
+                console.error('录音失败:', err);
+                alert('无法访问麦克风，请检查权限设置');
+            }
+        };
+
+        // 停止录音（需 ≥10 秒）
+        const handleStopRecording = () => {
+            if (recordingTimerRef.current) {
+                clearInterval(recordingTimerRef.current);
+                recordingTimerRef.current = null;
+            }
+            if (mediaRecorderRef.current && isRecording) {
+                const secs = recordingSecondsRef.current;
+                if (secs < MIN_RECORDING_SECONDS) {
+                    alert(`请至少录制 ${MIN_RECORDING_SECONDS} 秒。当前 ${secs} 秒。`);
+                    recordingSecondsRef.current = 0;
+                    setRecordingSeconds(0);
+                    return;
                 }
-            }, 2000);
+                mediaRecorderRef.current.stop();
+                setIsRecording(false);
+                recordingSecondsRef.current = 0;
+                setRecordingSeconds(0);
+                setCloneStep('idle');
+            }
+        };
+
+        // 处理文件上传（时长 ≥10 秒才允许克隆，并转为 WAV 供后端）
+        const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            if (!file.type.startsWith('audio/')) {
+                alert('请选择音频文件（WAV/MP3 等）');
+                return;
+            }
+            try {
+                const dur = await getAudioDurationSeconds(file);
+                if (dur < MIN_RECORDING_SECONDS) {
+                    alert(`音频时长至少 ${MIN_RECORDING_SECONDS} 秒，当前约 ${dur.toFixed(1)} 秒。`);
+                    event.target.value = '';
+                    return;
+                }
+            } catch (e) {
+                console.warn('无法解析音频时长，仍允许使用', e);
+            }
+            try {
+                const wav = await blobToWav(file);
+                setRecordedAudio(wav);
+            } catch (e) {
+                console.error('转 WAV 失败', e);
+                setRecordedAudio(file);
+            }
+            setCloneStep('idle');
+            event.target.value = '';
+        };
+
+        /** 设为当前使用。传 null 表示改用预设语音。 */
+        const handleSetAsCurrent = (id: string | null) => {
+            voiceSelectionService.setSelectedVoiceId(id);
+            setSelectedVoiceId(id);
+            if (id?.startsWith('cloned_')) {
+                VoiceService.preloadClonePhrases(id);
+            }
+        };
+
+        // 开始语音克隆
+        const handleStartVoiceClone = async () => {
+            if (!recordedAudio) {
+                fileInputRef.current?.click();
+                return;
+            }
+
+            console.log('[克隆] 开始流程, 音频大小:', recordedAudio.size);
+            setCloneStep('processing');
+            setVoiceProgress(0);
+
+            let progressInterval: ReturnType<typeof setInterval> | null = null;
+            try {
+                const voiceName = clonedVoiceName || `子女声音_${new Date().toLocaleDateString()}`;
+                progressInterval = setInterval(() => {
+                    setVoiceProgress(prev => {
+                        if (prev >= 90) return 90;
+                        return prev + 10;
+                    });
+                }, 300);
+
+                console.log('[克隆] 调用 VoiceService.cloneVoice...');
+                const result = await VoiceService.cloneVoice(recordedAudio, voiceName);
+
+                if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
+                setVoiceProgress(100);
+                console.log('[克隆] 结果', result);
+
+                if (result.status === 'ready' && result.isCloned) {
+                    setClonedVoiceId(result.id);
+                    setCloneStep('done');
+                    await loadVoices();
+                    voiceSelectionService.setSelectedVoiceId(result.id);
+                    setSelectedVoiceId(result.id);
+                    VoiceService.preloadClonePhrases(result.id);
+                    console.log('[克隆] 完成，已切换为当前音色');
+                } else if (result.status === 'failed') {
+                    throw new Error('克隆失败');
+                } else {
+                    console.warn('[克隆] 服务不可用，使用预设音色');
+                    setCloneStep('idle');
+                    setVoiceProgress(0);
+                }
+            } catch (e) {
+                if (progressInterval) { clearInterval(progressInterval); progressInterval = null; }
+                const msg = e instanceof Error ? e.message : '未知错误';
+                console.error('[克隆] 失败', e);
+                alert(`语音克隆失败：${msg}\n\n请确认：\n1. 已启动语音克隆服务 (./scripts/start_voice_clone.sh)\n2. 浏览器控制台与服务器日志中的报错信息`);
+                setCloneStep('idle');
+                setVoiceProgress(0);
+            }
+        };
+
+        // 试听克隆声音
+        const handlePreviewVoice = async () => {
+            if (!clonedVoiceId) return;
+            
+            try {
+                await VoiceService.speak('你好，我是你的数字人助手', clonedVoiceId);
+            } catch (error) {
+                console.error('试听失败:', error);
+                alert('试听失败，请检查服务连接');
+            }
         };
 
         const handleCreateAvatar = async () => {
@@ -401,28 +566,88 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                         </div>
 
                         <p className="text-sm text-indigo-50 leading-relaxed mb-6 opacity-90">
-                            只需录制 10 秒语音，AI 即可学习您的声线。
+                            直接录音 ≥10 秒或上传 ≥10 秒音频（WAV/MP3），整合为一份样本后用于克隆。克隆一次即存为一个音色，可在下方切换使用。
                         </p>
 
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept="audio/*"
+                            onChange={handleFileUpload}
+                            className="hidden"
+                        />
+
                         {cloneStep === 'idle' && (
-                            <div className="bg-white/10 rounded-xl p-1 backdrop-blur-sm border border-white/20 flex">
-                                <button
-                                    onClick={handleStartVoiceClone}
-                                    className="flex-1 bg-white text-indigo-600 py-3 rounded-lg font-bold text-sm shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-transform"
-                                >
-                                    <Mic size={16} /> 开始录制样本
-                                </button>
+                            <div className="space-y-3">
+                                <input
+                                    type="text"
+                                    placeholder="输入声音名称（如：女儿的声音）"
+                                    value={clonedVoiceName}
+                                    onChange={(e) => setClonedVoiceName(e.target.value)}
+                                    className="w-full px-4 py-2.5 bg-white/10 border border-white/20 rounded-lg text-white placeholder-white/50 text-sm focus:outline-none focus:ring-2 focus:ring-white/30"
+                                />
+                                <div className="bg-white/10 rounded-xl p-1 backdrop-blur-sm border border-white/20 flex gap-1">
+                                    <button
+                                        onClick={isRecording ? handleStopRecording : handleStartRecording}
+                                        className={`flex-1 py-3 rounded-lg font-bold text-sm shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-transform ${
+                                            isRecording ? 'bg-rose-500 text-white' : 'bg-white text-indigo-600'
+                                        }`}
+                                    >
+                                        <Mic size={16} />
+                                        {isRecording ? '停止录音' : '开始录音'}
+                                    </button>
+                                    <button
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="flex-1 bg-white/20 text-white py-3 rounded-lg font-bold text-sm shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-transform hover:bg-white/30"
+                                    >
+                                        <Upload size={16} /> 上传文件
+                                    </button>
+                                </div>
+                                {recordedAudio && (
+                                    <div className="bg-emerald-500/20 border border-emerald-400/30 rounded-xl p-3 flex items-center justify-between">
+                                        <div className="flex items-center gap-2 text-emerald-100 text-sm">
+                                            <CheckCircle size={16} />
+                                            已选择音频（≥10 秒）
+                                        </div>
+                                        <button
+                                            onClick={handleStartVoiceClone}
+                                            className="bg-white text-emerald-600 px-4 py-2 rounded-lg text-xs font-bold active:scale-95 transition-transform"
+                                        >
+                                            开始克隆
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
 
                         {cloneStep === 'recording' && (
                             <div className="flex flex-col items-center justify-center py-2">
                                 <div className="flex gap-1 h-8 items-center mb-2">
-                                    {[1, 2, 3, 4, 5].map(i => (
-                                        <div key={i} className="w-1.5 bg-white rounded-full animate-talk" style={{ height: Math.random() * 20 + 10 + 'px', animationDelay: i * 0.1 + 's' }}></div>
+                                    {[1, 2, 3, 4, 5].map((i) => (
+                                        <div
+                                            key={i}
+                                            className="w-1.5 bg-white rounded-full animate-talk"
+                                            style={{
+                                                height: Math.random() * 20 + 10 + 'px',
+                                                animationDelay: i * 0.1 + 's',
+                                            }}
+                                        />
                                     ))}
                                 </div>
-                                <p className="text-xs font-mono animate-pulse">正在采集声音样本...</p>
+                                <p className="text-sm font-mono text-white tabular-nums">
+                                    {String(Math.floor(recordingSeconds / 60)).padStart(2, '0')}:
+                                    {String(recordingSeconds % 60).padStart(2, '0')}
+                                </p>
+                                <p className="text-xs text-indigo-100 mt-1">
+                                    至少 {MIN_RECORDING_SECONDS} 秒后可停止
+                                </p>
+                                <button
+                                    onClick={handleStopRecording}
+                                    disabled={recordingSeconds < MIN_RECORDING_SECONDS}
+                                    className="mt-3 px-4 py-2 bg-rose-500 text-white rounded-lg text-xs font-bold active:scale-95 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    停止录音
+                                </button>
                             </div>
                         )}
 
@@ -442,18 +667,100 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                             <div className="bg-emerald-500/20 border border-emerald-400/30 rounded-xl p-3 flex flex-col gap-3 animate-fade-in">
                                 <div className="flex items-center gap-2 text-emerald-100 text-sm font-bold">
                                     <CheckCircle size={16} className="text-emerald-300" />
-                                    模型训练完成
+                                    声音克隆完成！
                                 </div>
+                                <p className="text-xs text-emerald-100/80">已存为可切换音色，当前已设为使用中</p>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <button className="bg-white/10 hover:bg-white/20 text-white text-xs py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-1.5">
+                                    <button
+                                        onClick={handlePreviewVoice}
+                                        className="bg-white/10 hover:bg-white/20 text-white text-xs py-2 rounded-lg font-medium transition-colors flex items-center justify-center gap-1.5"
+                                    >
                                         <Play size={12} /> 试听效果
                                     </button>
-                                    <button className="bg-white text-emerald-600 text-xs py-2 rounded-lg font-bold shadow-sm flex items-center justify-center gap-1.5 active:scale-95 transition-transform">
+                                    <button
+                                        onClick={() =>
+                                            VoiceService.speak(
+                                                '你好，我是你的数字人助手，很高兴为你服务',
+                                                clonedVoiceId || undefined
+                                            )
+                                        }
+                                        className="bg-white text-emerald-600 text-xs py-2 rounded-lg font-bold shadow-sm flex items-center justify-center gap-1.5 active:scale-95 transition-transform"
+                                    >
                                         <Volume2 size={12} /> 发送问候
                                     </button>
                                 </div>
+                                <button
+                                    onClick={() => {
+                                        setCloneStep('idle');
+                                        setRecordedAudio(null);
+                                        setClonedVoiceId(null);
+                                        setVoiceProgress(0);
+                                    }}
+                                    className="bg-white/10 hover:bg-white/20 text-white text-xs py-2 rounded-lg font-medium transition-colors"
+                                >
+                                    克隆新声音
+                                </button>
                             </div>
                         )}
+
+                        <div className="mt-4 pt-4 border-t border-white/20">
+                            <h4 className="text-xs font-bold text-indigo-100 uppercase tracking-wider mb-2">
+                                已存储的克隆音色 · 可切换使用
+                            </h4>
+                            <div className="space-y-2 max-h-40 overflow-y-auto">
+                                <div className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2">
+                                    <span className="text-sm text-white truncate flex-1">
+                                        预设语音（小小）
+                                        {!selectedVoiceId && (
+                                            <span className="ml-1 text-[10px] text-emerald-300">当前使用</span>
+                                        )}
+                                    </span>
+                                    <div className="flex gap-1 shrink-0">
+                                        <button
+                                            onClick={() => VoiceService.speak('你好，我是你的数字人助手')}
+                                            className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
+                                        >
+                                            试听
+                                        </button>
+                                        <button
+                                            onClick={() => handleSetAsCurrent(null)}
+                                            className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
+                                        >
+                                            设为当前
+                                        </button>
+                                    </div>
+                                </div>
+                                {clonedVoices.map((v) => (
+                                    <div
+                                        key={v.id}
+                                        className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2"
+                                    >
+                                        <span className="text-sm text-white truncate flex-1">
+                                            {v.name}
+                                            {selectedVoiceId === v.id && (
+                                                <span className="ml-1 text-[10px] text-emerald-300">当前使用</span>
+                                            )}
+                                        </span>
+                                        <div className="flex gap-1 shrink-0">
+                                            <button
+                                                onClick={() =>
+                                                    VoiceService.speak('你好，我是你的数字人助手', v.id)
+                                                }
+                                                className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
+                                            >
+                                                试听
+                                            </button>
+                                            <button
+                                                onClick={() => handleSetAsCurrent(v.id)}
+                                                className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
+                                            >
+                                                设为当前
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                     </div>
 
                     {/* General Settings */}

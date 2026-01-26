@@ -1,0 +1,22 @@
+# 语音克隆服务依赖（IndexTTS2）
+#
+# 本服务的模型与主依赖来自 IndexTTS2 项目，需先完成其安装与模型下载。
+# 详见: docs/voice-clone-installation.md
+#
+# 1. 克隆 index-tts 并安装:
+#    git clone https://github.com/index-tts/index-tts.git && cd index-tts
+#    git lfs install && git lfs pull
+#    uv sync --all-extras
+#
+# 2. 下载 IndexTTS-2 模型到 checkpoints/:
+#    uv tool install "huggingface-hub[cli,hf_xet]"
+#    hf download IndexTeam/IndexTTS-2 --local-dir=checkpoints
+#
+# 3. 在 index-tts 项目中添加 websockets（供本 WebSocket 服务使用）:
+#    uv add websockets
+#
+# 4. 运行语音克隆服务:
+#    在 index-tts 根目录: uv run python /path/to/emobit/scripts/voice_clone_server.py
+#    或设置 INDEX_TTS_HOME 后从任意目录运行。
+
+websockets>=12.0

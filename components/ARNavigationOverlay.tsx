@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { ArrowUp, ArrowLeft, ArrowRight, RotateCcw, MapPin, Navigation, X, Camera } from 'lucide-react';
 import { arNavigationService, ARNavigationState } from '../services/arNavigationService';
 import { RouteStep, mapService } from '../services/mapService';
-import { edgeTTSService } from '../services/ttsService';
+import { VoiceService } from '../services/api';
 
 interface ARNavigationOverlayProps {
     isActive: boolean;
@@ -138,7 +138,7 @@ const ARNavigationOverlay: React.FC<ARNavigationOverlayProps> = ({
     useEffect(() => {
         if (navState?.instruction && navState.instruction !== lastSpokenInstruction.current) {
             lastSpokenInstruction.current = navState.instruction;
-            edgeTTSService.speak(navState.instruction).catch(console.error);
+            VoiceService.speak(navState.instruction).catch(console.error);
         }
     }, [navState?.instruction]);
 

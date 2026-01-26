@@ -6,6 +6,7 @@ interface SmartAvatarProps {
     metrics?: Partial<HealthMetrics>; // 健康数据
     isTalking?: boolean;              // 是否在说话
     isListening?: boolean;            // 是否在聆听
+    isThinking?: boolean;             // 是否在思考（等 AI 回复）
     size?: 'small' | 'medium' | 'large';
     showStatus?: boolean;             // 是否显示状态信息
     onClick?: () => void;
@@ -20,6 +21,7 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
     metrics,
     isTalking = false,
     isListening = false,
+    isThinking = false,
     size = 'medium',
     showStatus = true,
     onClick,
@@ -192,6 +194,7 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
                             <div
                                 className={`absolute top-[55%] left-1/2 -translate-x-1/2 transition-all duration-300
                   ${isTalking ? 'w-4 h-4 rounded-full bg-slate-600 animate-[talk_0.15s_ease-in-out_infinite]' :
+                                        isThinking ? 'w-3 h-3 rounded-full bg-amber-400/80 animate-pulse' :
                                         avatarState.mood === 'happy' ? 'w-6 h-3 rounded-b-full border-b-2 border-slate-600' :
                                             avatarState.mood === 'worried' ? 'w-4 h-2 rounded-t-full border-t-2 border-slate-600' :
                                                 'w-5 h-0.5 bg-slate-500 rounded-full'}`}
@@ -207,7 +210,7 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
                         </>
                     )}
 
-                    {/* 聆听指示器 */}
+                    {/* 聆听 / 思考指示器 */}
                     {isListening && (
                         <div className="absolute -bottom-2 left-1/2 -translate-x-1/2">
                             <div className="flex gap-1">
@@ -217,13 +220,20 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
                             </div>
                         </div>
                     )}
+                    {isThinking && !isListening && (
+                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
+                            <div className="w-1.5 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
+                            <div className="w-1.5 h-2.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
+                            <div className="w-1.5 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
+                        </div>
+                    )}
                 </div>
 
                 {/* 心率显示 */}
                 <div
                     className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 
             ${sizeClasses.bpm} font-mono text-rose-400 pointer-events-none
-            ${isTalking || isListening ? 'opacity-0' : 'opacity-70'}`}
+            ${isTalking || isListening || isThinking ? 'opacity-0' : 'opacity-70'}`}
                 >
                     <span className="animate-pulse">❤️</span> {heartRate} BPM
                 </div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Phone, MapPin, Home, X, Navigation } from 'lucide-react';
 import { wanderingService, WanderingState, WanderingEvent } from '../services/wanderingService';
-import { edgeTTSService } from '../services/ttsService';
+import { VoiceService } from '../services/api';
 
 interface WanderingAlertProps {
     onNavigateHome?: () => void;
@@ -34,7 +34,7 @@ const WanderingAlert: React.FC<WanderingAlertProps> = ({
 
                 // 语音提醒
                 const message = getAlertMessage(event.state);
-                edgeTTSService.speak(message).catch(console.error);
+                VoiceService.speak(message).catch(console.error);
             } else if (event.type === 'wandering_end' || event.type === 'returned_safe') {
                 setIsVisible(false);
             }
@@ -97,7 +97,7 @@ const WanderingAlert: React.FC<WanderingAlertProps> = ({
 
     // 处理呼叫家人
     const handleCallFamily = () => {
-        edgeTTSService.speak('正在联系您的家人...').catch(console.error);
+        VoiceService.speak('正在联系您的家人...').catch(console.error);
         onCallFamily?.();
     };
 

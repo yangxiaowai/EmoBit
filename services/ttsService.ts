@@ -19,9 +19,24 @@ class EdgeTTSService {
         reject: (error: Error) => void;
     }> = new Map();
     private requestId = 0;
+    /** 预生成缓存：text -> audioUrl，用于零延迟开场/常用句 */
+    private preloadCache = new Map<string, string>();
 
     constructor() {
         this.wsUrl = import.meta.env.VITE_EDGE_TTS_WS_URL || 'ws://localhost:10096';
+    }
+
+    /**
+     * 预生成常用句并缓存，后续 synthesize 命中即返
+     */
+    async preload(texts: string[], voice: VoiceType = 'xiaoxiao'): Promise<void> {
+        await Promise.all(
+            texts.map(async (text) => {
+                if (this.preloadCache.has(text)) return;
+                const r = await this.synthesize(text, voice);
+                if (r.success && r.audioUrl) this.preloadCache.set(text, r.audioUrl);
+            })
+        );
     }
 
     /**
@@ -53,6 +68,9 @@ class EdgeTTSService {
      * @returns 音频URL (blob URL)
      */
     async synthesize(text: string, voice: VoiceType = 'xiaoxiao'): Promise<TTSResult> {
+        const cached = this.preloadCache.get(text);
+        if (cached) return { success: true, audioUrl: cached };
+
         return new Promise((resolve, reject) => {
             try {
                 const ws = new WebSocket(this.wsUrl);
