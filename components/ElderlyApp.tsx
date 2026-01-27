@@ -7,7 +7,6 @@ import { speechService, SpeechRecognitionResult } from '../services/speechServic
 import { mapService, RouteResult, RouteStep } from '../services/mapService';
 import { memoryService, LocationEvent } from '../services/memoryService';
 import { VoiceService } from '../services/api';
-import { edgeTTSService } from '../services/ttsService';
 import { voiceSelectionService } from '../services/voiceSelectionService';
 import { voiceCloneService } from '../services/voiceCloneService';
 import { aiService, AIResponse } from '../services/aiService';
@@ -808,7 +807,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
 
     // Edge 预生成：确认音「嗯」等
     useEffect(() => {
-        edgeTTSService.preload(['嗯']).catch(() => {});
+        // EdgeTTS 已移除，不再预加载
     }, []);
 
     // 克隆常用句预拉：等待服务端模型就绪后再触发（避免过早请求导致错误）
@@ -1021,31 +1020,201 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         return { intent: 'unknown' };
     }, []);
 
-    // 处理语音识别结果 - 使用AI大模型
-    const handleSpeechResult = useCallback(async (result: SpeechRecognitionResult) => {
-        if (!result.isFinal) {
-            setInterimText(result.text);
+    // 保存所有中间识别结果（用于整合处理）
+    const interimResultsRef = useRef<string[]>([]);
+    const lastRecognitionResultRef = useRef<SpeechRecognitionResult | null>(null);
+    const finalResultTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const isProcessingRef = useRef<boolean>(false); // 防止重复处理
+
+    // 整合识别结果：智能合并所有中间结果，选择最完整、最准确的句子
+    const consolidateResults = useCallback((results: string[]): string => {
+        if (results.length === 0) return '';
+        
+        // 去重并过滤空结果
+        const uniqueResults = Array.from(new Set(results.filter(r => r && r.trim())));
+        if (uniqueResults.length === 0) return '';
+        
+        // 如果只有一个结果，直接返回
+        if (uniqueResults.length === 1) {
+            console.log('[ElderlyApp] 📝 整合识别结果: 只有一个结果，直接使用');
+            return uniqueResults[0];
+        }
+        
+        // 按长度排序，优先考虑较长的结果（通常更完整）
+        const sorted = uniqueResults.sort((a, b) => b.length - a.length);
+        
+        // 智能选择策略：
+        // 1. 优先选择包含标点符号的结果（更可能是完整句子）
+        // 2. 优先选择最长的结果
+        // 3. 如果多个结果相似，选择最完整的
+        
+        let bestResult = sorted[0];
+        let bestScore = 0;
+        
+        for (const result of sorted) {
+            let score = result.length; // 基础分数：长度
+            
+            // 加分项：
+            // 1. 包含标点符号（句号、问号、感叹号）- 表示完整句子
+            if (/[。！？]/.test(result)) {
+                score += 50;
+            }
+            
+            // 2. 包含常见疑问词（更可能是完整问题）
+            if (/[怎么|什么|哪里|哪个|为什么|如何]/.test(result)) {
+                score += 30;
+            }
+            
+            // 3. 包含常见动词（更可能是完整表达）
+            if (/[是|有|在|去|来|说|看|听|想|做]/.test(result)) {
+                score += 20;
+            }
+            
+            // 4. 不包含明显的截断（不以常见截断词结尾）
+            if (!/[的|了|呢|啊|吧]$/.test(result)) {
+                score += 10;
+            }
+            
+            // 5. 检查是否包含其他结果的关键内容（更完整）
+            let containsOthers = 0;
+            for (const other of sorted) {
+                if (result !== other && result.includes(other)) {
+                    containsOthers += other.length;
+                }
+            }
+            score += containsOthers * 0.5;
+            
+            if (score > bestScore) {
+                bestScore = score;
+                bestResult = result;
+            }
+        }
+        
+        // 清理结果：移除重复的标点符号，统一标点
+        bestResult = bestResult
+            .replace(/[。]{2,}/g, '。')  // 多个句号合并为一个
+            .replace(/[！]{2,}/g, '！')    // 多个感叹号合并为一个
+            .replace(/[？]{2,}/g, '？')    // 多个问号合并为一个
+            .trim();
+        
+        console.log('[ElderlyApp] 📝 整合识别结果:');
+        console.log('[ElderlyApp]   所有中间结果:', uniqueResults);
+        console.log('[ElderlyApp]   选择最完整结果:', bestResult);
+        console.log('[ElderlyApp]   结果长度:', bestResult.length, '字符');
+        console.log('[ElderlyApp]   评分:', bestScore.toFixed(1));
+        
+        return bestResult;
+    }, []);
+
+    // 处理最终识别结果（提取为独立函数，处理 AI 调用和语音播放）
+    const processFinalResult = useCallback(async (result: SpeechRecognitionResult) => {
+        // 防止重复处理
+        if (isProcessingRef.current) {
+            console.log('[ElderlyApp] ⚠️ 正在处理中，忽略重复的最终结果');
+            return;
+        }
+        isProcessingRef.current = true;
+        // 最终结果
+        console.log('='.repeat(60));
+        console.log(`[ElderlyApp] ✅ 最终识别结果: "${result.text}"`);
+        console.log('='.repeat(60));
+        
+        // 验证识别结果
+        if (!result.text || !result.text.trim()) {
+            console.error('[ElderlyApp] ❌ 识别结果为空，无法处理');
             return;
         }
 
         setInterimText('');
+        setIsListening(false);
+        
+        // 清除超时定时器（已收到最终结果）
+        if (finalResultTimeoutRef.current) {
+            clearTimeout(finalResultTimeoutRef.current);
+            finalResultTimeoutRef.current = null;
+        }
+        
+        // 清空中间结果数组（已处理完成）
+        interimResultsRef.current = [];
+        
+        // 收到最终结果，停止识别
+        console.log('[ElderlyApp] 收到最终结果，停止识别并处理...');
         setIsRecording(false);
         speechService.stopRecognition();
-        setIsListening(false);
 
         setVoiceInputDisplay(result.text);
         setIsThinking(true);
-        edgeTTSService.speak('嗯', 'xiaoxiao').catch(() => {});
+        
+        console.log('[ElderlyApp] 正在调用 AI 服务处理:', result.text);
+        // EdgeTTS 已移除，不再播放确认音
 
         try {
+            console.log('[ElderlyApp] ============================================================');
+            console.log('[ElderlyApp] 调用 AI 服务，输入:', result.text);
+            console.log('[ElderlyApp] ============================================================');
+            
+            // 检查 AI 服务是否配置
+            if (!aiService.isConfigured()) {
+                console.warn('[ElderlyApp] ⚠️ AI 服务未配置 API Key，将使用本地回复');
+            }
+            
+            // 确保识别文本不为空
+            if (!result.text || !result.text.trim()) {
+                console.error('[ElderlyApp] ❌ 识别结果为空，无法调用 AI 服务');
+                throw new Error('识别结果为空');
+            }
+            
+            console.log('[ElderlyApp] 开始调用 aiService.chat()...');
             const response = await aiService.chat(result.text);
+            console.log('[ElderlyApp] ✅ AI 服务响应:', response);
+            console.log('[ElderlyApp] AI 回复文本:', response?.text);
+
+            if (!response) {
+                console.error('[ElderlyApp] ❌ AI 服务返回 null 或 undefined');
+                throw new Error('AI 服务返回 null');
+            }
+            
+            if (!response.text || !response.text.trim()) {
+                console.error('[ElderlyApp] ❌ AI 服务返回空文本');
+                console.error('[ElderlyApp] 完整响应对象:', JSON.stringify(response, null, 2));
+                throw new Error('AI 服务返回空文本');
+            }
+            
+            console.log('[ElderlyApp] ✅ AI 服务调用成功，回复:', response.text);
 
             setVoiceInputDisplay(null);
             setAiMessage(response.text);
             setIsThinking(false);
             setIsTalking(true);
 
-            VoiceService.speakSegments(response.text, undefined, undefined, () => setIsTalking(false)).catch(() => setIsTalking(false));
+            console.log('[ElderlyApp] 开始播放 AI 回复:', response.text);
+            console.log('[ElderlyApp] 检查语音服务状态...');
+            
+            // 检查语音克隆服务
+            const voiceCloneAvailable = await voiceCloneService.checkConnection();
+            console.log('[ElderlyApp] 语音克隆服务状态:', voiceCloneAvailable ? '✅ 可用' : '❌ 不可用');
+            
+            if (!voiceCloneAvailable) {
+                console.warn('[ElderlyApp] ⚠️ 语音克隆服务不可用，无法播放语音');
+            }
+            
+            // 播放语音
+            try {
+                await VoiceService.speakSegments(
+                    response.text, 
+                    undefined, 
+                    undefined, 
+                    () => {
+                        console.log('[ElderlyApp] ✅ 语音播放完成');
+                        setIsTalking(false);
+                    }
+                );
+                console.log('[ElderlyApp] ✅ 语音播放已启动');
+            } catch (speakError) {
+                console.error('[ElderlyApp] ❌ 语音播放失败:', speakError);
+                setIsTalking(false);
+                // 即使语音播放失败，也要显示文本回复
+            }
 
             // 记录对话用于认知评估
             cognitiveService.recordConversation(result.text, response.text);
@@ -1073,21 +1242,163 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 }, 2500);
             }
         } catch (error) {
-            console.error('AI服务错误:', error);
+            console.error('[ElderlyApp] ❌ AI服务错误:', error);
+            console.error('[ElderlyApp] 错误详情:', {
+                message: error instanceof Error ? error.message : String(error),
+                stack: error instanceof Error ? error.stack : undefined,
+            });
+            
             setIsThinking(false);
             setVoiceInputDisplay(null);
-            setAiMessage('抱歉，我没太听清楚，您能再说一遍吗？');
+            
+            const errorMessage = '抱歉，我没太听清楚，您能再说一遍吗？';
+            setAiMessage(errorMessage);
             setIsTalking(true);
-            VoiceService.speakSegments('抱歉，我没太听清楚，您能再说一遍吗？', undefined, undefined, () => setIsTalking(false)).catch(() => setIsTalking(false));
+            
+            // 尝试播放错误提示
+            VoiceService.speakSegments(
+                errorMessage, 
+                undefined, 
+                undefined, 
+                () => setIsTalking(false)
+            ).catch((speakErr) => {
+                console.error('[ElderlyApp] ❌ 播放错误提示也失败:', speakErr);
+                setIsTalking(false);
+            });
+        } finally {
+            // 处理完成后重置标志
+            isProcessingRef.current = false;
         }
     }, []);
+
+    // 处理语音识别结果 - 使用AI大模型
+    const handleSpeechResult = useCallback(async (result: SpeechRecognitionResult) => {
+        // 详细日志输出
+        console.log('[ElderlyApp] ============================================================');
+        console.log('[ElderlyApp] 📥 收到识别结果:', {
+            text: result.text,
+            isFinal: result.isFinal,
+            confidence: result.confidence,
+        });
+        console.log('[ElderlyApp] ============================================================');
+        
+        // 保存最后一个结果（包括中间结果）
+        if (result.text && result.text.trim()) {
+            lastRecognitionResultRef.current = result;
+        }
+        
+        if (!result.isFinal) {
+            // 收集中间结果
+            if (result.text && result.text.trim()) {
+                interimResultsRef.current.push(result.text.trim());
+                console.log('[ElderlyApp] 🔄 中间结果（已收集，等待用户停止说话）:', result.text);
+                console.log('[ElderlyApp]   当前已收集', interimResultsRef.current.length, '个中间结果');
+            }
+            setInterimText(result.text);
+            
+            // 清除之前的超时定时器
+            if (finalResultTimeoutRef.current) {
+                clearTimeout(finalResultTimeoutRef.current);
+            }
+            
+            // 改进的超时机制：只在用户停止说话后（2秒内没有新的中间结果）才处理
+            // 增加等待时间，确保用户真正停止说话，避免在用户说话过程中触发
+            finalResultTimeoutRef.current = setTimeout(() => {
+                // 检查是否还在处理中，避免重复处理
+                if (isProcessingRef.current) {
+                    console.log('[ElderlyApp] ⚠️ 已在处理中，忽略超时触发');
+                    return;
+                }
+                
+                // 整合所有中间结果
+                if (interimResultsRef.current.length > 0) {
+                    const consolidatedText = consolidateResults(interimResultsRef.current);
+                    if (consolidatedText) {
+                        console.log('[ElderlyApp] ⚠️ 用户停止说话（2秒内无新结果），整合并处理结果');
+                        console.log('[ElderlyApp]   整合后的文本:', consolidatedText);
+                        // 处理整合后的结果
+                        processFinalResult({
+                            text: consolidatedText,
+                            isFinal: true,
+                            confidence: undefined,
+                        });
+                    }
+                }
+            }, 2000); // 增加到2秒，确保用户真正停止说话
+            
+            return;
+        }
+        
+        // 清除超时定时器（已收到最终结果）
+        if (finalResultTimeoutRef.current) {
+            clearTimeout(finalResultTimeoutRef.current);
+            finalResultTimeoutRef.current = null;
+        }
+
+        // 如果服务器发送了最终结果，优先使用它
+        // 但也可以整合中间结果和最终结果，选择最完整的
+        let finalText = result.text;
+        if (interimResultsRef.current.length > 0) {
+            // 将最终结果也加入整合列表
+            interimResultsRef.current.push(result.text.trim());
+            const consolidatedText = consolidateResults(interimResultsRef.current);
+            if (consolidatedText && consolidatedText.length > finalText.length) {
+                console.log('[ElderlyApp] 📝 使用整合后的结果（比服务器最终结果更完整）');
+                finalText = consolidatedText;
+            }
+        }
+
+        // 处理最终结果（中间结果会在processFinalResult中清空）
+        processFinalResult({
+            ...result,
+            text: finalText,
+        });
+    }, [processFinalResult, consolidateResults]);
 
     // 开始/停止语音识别
     const toggleRecording = useCallback(async () => {
         if (isRecording) {
-            speechService.stopRecognition();
+            console.log('[ElderlyApp] 用户手动停止录音');
+            
+            // 清除超时定时器（停止自动处理）
+            if (finalResultTimeoutRef.current) {
+                clearTimeout(finalResultTimeoutRef.current);
+                finalResultTimeoutRef.current = null;
+            }
+            
+            // 先停止识别，等待服务器发送最终结果
             setIsRecording(false);
             setIsListening(false);
+            speechService.stopRecognition();
+            
+            // 等待服务器发送最终结果（最多等待10秒）
+            // 服务器处理音频可能需要5-10秒（特别是长音频），所以增加等待时间
+            // 如果10秒内没有收到最终结果，整合所有中间结果
+            setTimeout(() => {
+                // 检查是否已经在处理中
+                if (isProcessingRef.current) {
+                    console.log('[ElderlyApp] 已在处理最终结果，无需使用中间结果');
+                    return;
+                }
+                
+                // 整合所有中间结果（作为后备方案）
+                if (interimResultsRef.current.length > 0) {
+                    const consolidatedText = consolidateResults(interimResultsRef.current);
+                    if (consolidatedText) {
+                        console.log('[ElderlyApp] ⚠️ 等待10秒后未收到最终结果，整合并处理中间结果');
+                        console.log('[ElderlyApp]   整合后的文本:', consolidatedText);
+                        processFinalResult({
+                            text: consolidatedText,
+                            isFinal: true,
+                            confidence: undefined,
+                        });
+                    }
+                } else if (!lastRecognitionResultRef.current) {
+                    console.log('[ElderlyApp] ⚠️ 没有识别结果，无法处理');
+                    console.log('[ElderlyApp] 提示：服务器可能仍在处理音频，请稍候...');
+                }
+            }, 10000); // 等待10秒让服务器发送最终结果（支持长音频处理）
+            
             return;
         }
 
@@ -1095,6 +1406,9 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
             setSpeechError(null);
             setIsRecording(true);
             setIsListening(true);
+            isProcessingRef.current = false; // 重置处理标志
+            lastRecognitionResultRef.current = null; // 重置最后一个结果
+            interimResultsRef.current = []; // 清空中间结果数组
 
             await speechService.startRecognition(
                 handleSpeechResult,

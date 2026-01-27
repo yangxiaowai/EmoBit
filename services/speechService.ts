@@ -1,10 +1,18 @@
 /**
- * 语音识别服务 - 使用浏览器内置 Web Speech API
- * 完全免费，无需下载模型或运行服务器！
+ * 语音识别服务 - 仅使用 FunASR
  * 
- * 支持浏览器: Chrome, Edge, Safari
- * 不支持: Firefox
+ * 要求：
+ * - 必须运行 FunASR 服务器（ws://localhost:10095）
+ * - 不依赖浏览器 API，兼容所有浏览器
+ * 
+ * 优势：
+ * - 中文识别准确率更高
+ * - 支持离线运行（本地部署）
+ * - 可自定义模型和优化
+ * - 不依赖浏览器兼容性
  */
+
+import { funasrService, FunASRResult } from './funasrService';
 
 export interface SpeechRecognitionResult {
     text: string;
@@ -15,121 +23,102 @@ export interface SpeechRecognitionResult {
 export type OnResultCallback = (result: SpeechRecognitionResult) => void;
 export type OnErrorCallback = (error: Error) => void;
 
-// 扩展Window接口以支持Web Speech API
-declare global {
-    interface Window {
-        SpeechRecognition: typeof SpeechRecognition;
-        webkitSpeechRecognition: typeof SpeechRecognition;
-    }
-}
-
 export class SpeechRecognitionService {
-    private recognition: SpeechRecognition | null = null;
     private isRecording = false;
     private onResult: OnResultCallback | null = null;
     private onError: OnErrorCallback | null = null;
 
     /**
-     * 检查浏览器是否支持语音识别
-     */
-    static isSupported(): boolean {
-        return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
-    }
-
-    /**
-     * 检查服务是否可用
+     * 检查 FunASR 服务是否可用
      */
     async checkConnection(): Promise<boolean> {
-        return SpeechRecognitionService.isSupported();
+        return await funasrService.checkConnection();
     }
 
     /**
      * 开始语音识别
+     * 仅使用 FunASR 服务
      */
     async startRecognition(
         onResult: OnResultCallback,
         onError?: OnErrorCallback
     ): Promise<void> {
-        if (!SpeechRecognitionService.isSupported()) {
-            const err = new Error('您的浏览器不支持语音识别，请使用 Chrome 或 Edge');
-            onError?.(err);
-            throw err;
+        if (this.isRecording) {
+            console.warn('[SpeechService] 已在录音中');
+            return;
         }
 
         this.onResult = onResult;
         this.onError = onError || null;
 
-        try {
-            // 创建语音识别实例
-            const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
-            this.recognition = new SpeechRecognitionAPI();
-
-            // 配置
-            this.recognition.lang = 'zh-CN'; // 中文
-            this.recognition.continuous = true; // 持续识别
-            this.recognition.interimResults = true; // 实时显示中间结果
-            this.recognition.maxAlternatives = 1;
-
-            // 处理识别结果
-            this.recognition.onresult = (event: SpeechRecognitionEvent) => {
-                const lastResult = event.results[event.results.length - 1];
-                const transcript = lastResult[0].transcript;
-                const confidence = lastResult[0].confidence;
-                const isFinal = lastResult.isFinal;
-
-                console.log('[WebSpeech] 识别结果:', transcript, isFinal ? '(最终)' : '(中间)');
-
-                this.onResult?.({
-                    text: transcript,
-                    isFinal,
-                    confidence,
-                });
-            };
-
-            // 处理错误
-            this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-                console.error('[WebSpeech] 错误:', event.error);
-
-                let errorMessage = '语音识别错误';
-                switch (event.error) {
-                    case 'no-speech':
-                        errorMessage = '未检测到语音，请说话';
-                        break;
-                    case 'audio-capture':
-                        errorMessage = '无法访问麦克风';
-                        break;
-                    case 'not-allowed':
-                        errorMessage = '请允许麦克风权限';
-                        break;
-                    case 'network':
-                        errorMessage = '网络错误，请检查网络连接';
-                        break;
-                }
-
-                this.onError?.(new Error(errorMessage));
-            };
-
-            // 处理结束
-            this.recognition.onend = () => {
-                console.log('[WebSpeech] 识别结束');
-                // 如果还在录音状态，自动重启（处理长时间录音）
-                if (this.isRecording) {
-                    try {
-                        this.recognition?.start();
-                    } catch (e) {
-                        this.isRecording = false;
-                    }
-                }
-            };
-
-            // 开始识别
-            this.recognition.start();
-            this.isRecording = true;
-            console.log('[WebSpeech] 开始识别');
-
-        } catch (error) {
-            const err = error instanceof Error ? error : new Error('语音识别启动失败');
+        // 检查 FunASR 服务是否可用
+        const funasrAvailable = await funasrService.checkConnection();
+        if (!funasrAvailable) {
+            const err = new Error(
+                'FunASR 服务不可用。请确保 FunASR 服务器正在运行。\n' +
+                '启动方法: ./scripts/start_funasr.sh\n' +
+                '或运行: python scripts/funasr_server.py'
+            );
             this.onError?.(err);
+            throw err;
+        }
+
+        try {
+            console.log('[SpeechService] ============================================================');
+            console.log('[SpeechService] 准备启动 FunASR 识别...');
+            console.log('[SpeechService] onResult 回调:', this.onResult ? '✅ 已设置' : '❌ 未设置');
+            console.log('[SpeechService] ============================================================');
+            
+            await funasrService.startRecognition(
+                (result: FunASRResult) => {
+                    // 详细日志
+                    console.log('[SpeechService] ============================================================');
+                    console.log('[SpeechService] 📥 收到 FunASR 识别结果:', {
+                        text: result.text,
+                        isFinal: result.isFinal,
+                    });
+                    console.log('[SpeechService] ============================================================');
+                    
+                    // 转换 FunASR 结果格式
+                    const speechResult = {
+                        text: result.text,
+                        isFinal: result.isFinal,
+                        confidence: undefined, // FunASR 不提供置信度
+                    };
+                    
+                    // 输出到控制台，方便调试
+                    if (speechResult.isFinal && speechResult.text) {
+                        console.log('='.repeat(60));
+                        console.log(`[SpeechService] ✅ 最终识别结果: "${speechResult.text}"`);
+                        console.log(`[SpeechService] 准备传递给上层回调...`);
+                        console.log('='.repeat(60));
+                    }
+                    
+                    // 检查回调是否存在
+                    if (!this.onResult) {
+                        console.error('[SpeechService] ❌ onResult 回调未设置！无法传递结果');
+                    } else {
+                        console.log(`[SpeechService] 调用上层 onResult 回调...`);
+                        try {
+                            this.onResult(speechResult);
+                            console.log(`[SpeechService] ✅ 上层回调已调用`);
+                        } catch (error) {
+                            console.error('[SpeechService] ❌ 上层回调执行失败:', error);
+                        }
+                    }
+                },
+                (error: Error) => {
+                    console.error('[SpeechService] ❌ 识别错误:', error);
+                    this.onError?.(error);
+                }
+            );
+            this.isRecording = true;
+            console.log('[SpeechService] ✅ 使用 FunASR 开始识别');
+        } catch (error) {
+            const err = error instanceof Error ? error : new Error('FunASR 启动失败');
+            console.error('[SpeechService] ❌ 启动失败:', err);
+            this.onError?.(err);
+            this.isRecording = false;
             throw err;
         }
     }
@@ -138,18 +127,13 @@ export class SpeechRecognitionService {
      * 停止语音识别
      */
     stopRecognition(): void {
-        this.isRecording = false;
-
-        if (this.recognition) {
-            try {
-                this.recognition.stop();
-            } catch (e) {
-                // 忽略停止时的错误
-            }
-            this.recognition = null;
+        if (!this.isRecording) {
+            return;
         }
 
-        console.log('[WebSpeech] 已停止');
+        this.isRecording = false;
+        funasrService.stopRecognition();
+        console.log('[SpeechService] 已停止识别');
     }
 
     /**

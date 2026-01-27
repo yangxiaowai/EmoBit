@@ -213,7 +213,9 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
      * 发送消息并获取回复
      */
     async chat(userMessage: string): Promise<AIResponse> {
-        console.log('[AI] 收到消息:', userMessage);
+        console.log('[AI] ============================================================');
+        console.log('[AI] 收到用户消息:', userMessage);
+        console.log('[AI] ============================================================');
 
         // 添加到历史
         this.chatHistory.push({
@@ -230,21 +232,27 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
         // 🚀 本地优先策略：先检查是否可以本地回答
         const localResponse = this.tryLocalResponse(userMessage);
         if (localResponse) {
-            console.log('[AI] 使用本地回复（节省API调用）');
+            console.log('[AI] ✅ 使用本地回复（节省API调用）');
+            console.log('[AI] 回复内容:', localResponse.text);
+            console.log('[AI] ============================================================');
             return localResponse;
         }
 
         // 如果没有 API Key，使用通用本地回复
         if (!this.isConfigured()) {
-            console.log('[AI] 未配置API Key，使用本地回复');
-            return this.getLocalResponse(userMessage);
+            console.log('[AI] ⚠️ 未配置API Key，使用本地回复');
+            const response = this.getLocalResponse(userMessage);
+            console.log('[AI] 回复内容:', response.text);
+            console.log('[AI] ============================================================');
+            return response;
         }
 
-        console.log('[AI] 复杂问题，调用 Gemini API...');
+        console.log('[AI] 🔄 复杂问题，调用 Groq API...');
 
         try {
             const response = await this.callGroqAPI(userMessage);
-            console.log('[AI] Gemini 回复:', response.text);
+            console.log('[AI] ✅ Groq API 回复:', response.text);
+            console.log('[AI] ============================================================');
 
             // 添加回复到历史
             this.chatHistory.push({
@@ -255,9 +263,14 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
 
             return response;
         } catch (error) {
-            console.error('[AI] Gemini API 调用失败:', error);
+            console.error('[AI] ❌ Gemini API 调用失败:', error);
+            console.error('[AI] 错误详情:', error instanceof Error ? error.stack : String(error));
             // 回退到本地回复
-            return this.getLocalResponse(userMessage);
+            console.log('[AI] ⚠️ 使用本地回复作为回退方案');
+            const fallbackResponse = this.getLocalResponse(userMessage);
+            console.log('[AI] 本地回复内容:', fallbackResponse.text);
+            console.log('[AI] ============================================================');
+            return fallbackResponse;
         }
     }
 

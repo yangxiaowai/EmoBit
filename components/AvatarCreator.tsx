@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { Camera, Mic, Wand2, Loader2, Check, Sparkles } from 'lucide-react';
 import { aigcService, GenerateAvatarOptions } from '../services/aigcService';
+import { speechService } from '../services/speechService';
 
 interface AvatarCreatorProps {
     onAvatarCreated: (imageUrl: string) => void;
@@ -27,30 +28,30 @@ const AvatarCreator: React.FC<AvatarCreatorProps> = ({ onAvatarCreated, onClose 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-    // 语音识别
-    const handleVoiceInput = () => {
-        if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-            setError('您的浏览器不支持语音识别');
-            return;
-        }
+    // 语音识别 - 使用统一的 speechService（FunASR）
+    const handleVoiceInput = async () => {
+        try {
+            setIsListening(true);
+            setError(null);
 
-        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        const recognition = new SpeechRecognition();
-        recognition.lang = 'zh-CN';
-        recognition.continuous = false;
-
-        recognition.onstart = () => setIsListening(true);
-        recognition.onend = () => setIsListening(false);
-        recognition.onresult = (event: any) => {
-            const text = event.results[0][0].transcript;
-            setDescription(text);
-        };
-        recognition.onerror = () => {
+            await speechService.startRecognition(
+                (result) => {
+                    if (result.isFinal) {
+                        setDescription(result.text);
+                        setIsListening(false);
+                        speechService.stopRecognition();
+                    }
+                },
+                (error) => {
+                    setIsListening(false);
+                    setError(error.message || '语音识别失败，请重试');
+                    speechService.stopRecognition();
+                }
+            );
+        } catch (error) {
             setIsListening(false);
-            setError('语音识别失败，请重试');
-        };
-
-        recognition.start();
+            setError(error instanceof Error ? error.message : '语音识别启动失败，请确保 FunASR 服务正在运行');
+        }
     };
 
     // 文字生成头像

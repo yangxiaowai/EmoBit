@@ -1,10 +1,9 @@
 /**
  * EmoBit API 服务层
- * 使用免费本地服务：Edge TTS (语音合成) + Ready Player Me (3D形象)
+ * 使用语音克隆服务 (IndexTTS2) + Ready Player Me (3D形象)
  */
 
 import { VoiceProfile, AvatarModel } from '../types';
-import { edgeTTSService } from './ttsService';
 import { voiceCloneService } from './voiceCloneService';
 import { voiceSelectionService } from './voiceSelectionService';
 
@@ -22,7 +21,7 @@ const COMMON_CLONE_PHRASES = [
   '抱歉，我没太听清楚，您能再说一遍吗？',
 ];
 
-// --- Voice Service (使用本地Edge TTS - 免费) ---
+// --- Voice Service (使用语音克隆服务 - IndexTTS2) ---
 export const VoiceService = {
   /**
    * 声音克隆功能 - 使用 IndexTTS2
@@ -36,14 +35,8 @@ export const VoiceService = {
       const isAvailable = await voiceCloneService.checkConnection();
       
       if (!isAvailable) {
-        console.warn('[VoiceService] 语音克隆服务不可用，使用预设声音');
-        return {
-          id: 'voice_xiaoxiao',
-          name: name || '小小 (女声)',
-          status: 'ready',
-          previewUrl: undefined,
-          isCloned: false,
-        };
+        console.warn('[VoiceService] 语音克隆服务不可用');
+        throw new Error('语音克隆服务不可用，请确保语音克隆服务器正在运行');
       }
 
       const voiceId = `cloned_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -77,21 +70,17 @@ export const VoiceService = {
   },
 
   /**
-   * 获取可用的预设声音列表
+   * 获取可用的预设声音列表（已废弃，只返回空数组）
+   * 现在只支持克隆声音
    */
   getAvailableVoices: (): VoiceProfile[] => {
-    return [
-      { id: 'xiaoxiao', name: '小小 (女声)', status: 'ready' },
-      { id: 'yunxi', name: '云希 (男声)', status: 'ready' },
-      { id: 'xiaoyi', name: '小艺 (童声)', status: 'ready' },
-      { id: 'yunyang', name: '云扬 (新闻男声)', status: 'ready' },
-    ];
+    return [];
   },
 
   /**
-   * 使用 Edge TTS 或克隆声音进行文字转语音
+   * 使用克隆声音进行文字转语音
    * @param text 要转换的文本
-   * @param voiceId 可选。不传则使用当前选中的克隆音色；若未选中克隆则用预设 xiaoxiao
+   * @param voiceId 可选。不传则使用当前选中的克隆音色
    * @param voiceProfile 可选，用于判断是否为克隆声音
    * @returns 返回音频 Blob 的 URL
    */
@@ -104,29 +93,24 @@ export const VoiceService = {
       return 'mock_audio_url.mp3';
     }
 
-    const id = voiceId ?? voiceSelectionService.getSelectedVoiceId() ?? 'xiaoxiao';
-    const isCloned = voiceProfile?.isCloned ?? id.startsWith('cloned_');
+    const id = voiceId ?? voiceSelectionService.getSelectedVoiceId();
+    if (!id || !id.startsWith('cloned_')) {
+      throw new Error('必须使用克隆声音，请先克隆一个声音');
+    }
 
     try {
-      if (isCloned) {
-        const result = await voiceCloneService.synthesize(text, id, 'zh');
-        if (result.success && result.audioUrl) return result.audioUrl;
-        console.warn('[VoiceService] 克隆声音合成失败，回退到 Edge TTS');
-      }
-
-      const result = await edgeTTSService.synthesize(text, id as any);
+      const result = await voiceCloneService.synthesize(text, id, 'zh');
       if (result.success && result.audioUrl) return result.audioUrl;
-      console.warn('[VoiceService] Edge TTS 合成失败:', result.error);
-      return '';
+      throw new Error(result.error || '语音合成失败');
     } catch (error) {
       console.error('[VoiceService] 语音合成失败:', error);
-      return '';
+      throw error;
     }
   },
 
   /**
-   * 直接播放语音。不传 voiceId 时使用当前选中的克隆音色，未选中则用预设。
-   * 对话、讲解回忆、相册故事、提醒等均使用选中音色（含克隆），以体现数字人个性化。
+   * 直接播放语音。使用当前选中的克隆音色。
+   * 对话、讲解回忆、相册故事、提醒等均使用选中音色，以体现数字人个性化。
    * onEnded 播完或出错时回调。
    * @param options.forceEdgeTTS 若为 true，强制用 Edge TTS（忽略克隆）；仅用于特殊降级或“极速模式”等可选场景。
    */
@@ -134,28 +118,26 @@ export const VoiceService = {
     text: string,
     voiceId?: string,
     voiceProfile?: VoiceProfile,
-    onEnded?: () => void,
-    options?: { forceEdgeTTS?: boolean }
+    onEnded?: () => void
   ): Promise<void> => {
     try {
-      const useEdge = options?.forceEdgeTTS === true;
-      const id = voiceId ?? voiceSelectionService.getSelectedVoiceId() ?? 'xiaoxiao';
-      const isCloned = !useEdge && (voiceProfile?.isCloned ?? id.startsWith('cloned_'));
-      const edgeVoice = useEdge && id.startsWith('cloned_') ? 'xiaoxiao' : id;
-
-      if (isCloned) {
-        await voiceCloneService.speak(text, id, 'zh', onEnded);
-      } else {
-        await edgeTTSService.speak(text, edgeVoice as any, onEnded);
+      const id = voiceId ?? voiceSelectionService.getSelectedVoiceId();
+      if (!id || !id.startsWith('cloned_')) {
+        throw new Error('必须使用克隆声音，请先克隆一个声音');
       }
+
+      console.log(`[VoiceService] 播放语音: "${text}" (使用克隆，voiceId: ${id})`);
+      console.log('[VoiceService] 使用语音克隆服务');
+      await voiceCloneService.speak(text, id, 'zh', onEnded);
+      console.log('[VoiceService] ✅ 语音播放请求已发送');
     } catch (error) {
-      console.error('[VoiceService] 播放语音失败:', error);
+      console.error('[VoiceService] ❌ 播放语音失败:', error);
+      console.error('[VoiceService] 错误详情:', error instanceof Error ? error.stack : String(error));
       onEnded?.();
     }
   },
 
   stop: (): void => {
-    edgeTTSService.stop();
     voiceCloneService.stop();
   },
 
@@ -167,8 +149,7 @@ export const VoiceService = {
     text: string,
     voiceId?: string,
     voiceProfile?: VoiceProfile,
-    onEnded?: () => void,
-    options?: { forceEdgeTTS?: boolean }
+    onEnded?: () => void
   ): Promise<void> => {
     const t = text.trim();
     if (!t) {
@@ -177,9 +158,12 @@ export const VoiceService = {
     }
     const segs = t.split(/[。！？\n]+/).map((s) => s.trim()).filter(Boolean);
     if (segs.length <= 1) {
-      return VoiceService.speak(t, voiceId, voiceProfile, onEnded, options);
+      return VoiceService.speak(t, voiceId, voiceProfile, onEnded);
     }
-    const id = voiceId ?? voiceSelectionService.getSelectedVoiceId() ?? 'xiaoxiao';
+    const id = voiceId ?? voiceSelectionService.getSelectedVoiceId();
+    if (!id) {
+      throw new Error('必须使用克隆声音，请先克隆一个声音');
+    }
     
     const run = async (i: number): Promise<void> => {
       if (i >= segs.length) {
@@ -191,7 +175,7 @@ export const VoiceService = {
         await new Promise<void>((resolve, reject) => {
           VoiceService.speak(segs[i], id, voiceProfile, () => {
             resolve();
-          }, options).catch(reject);
+          }).catch(reject);
         });
         // 当前句播放完成后，继续播放下一句
         await run(i + 1);
@@ -212,11 +196,9 @@ export const VoiceService = {
   },
 
   /**
-   * 获取所有可用的声音（包括预设和克隆的）
+   * 获取所有可用的声音（只返回克隆的声音）
    */
   getAllVoices: async (): Promise<VoiceProfile[]> => {
-    const presetVoices = VoiceService.getAvailableVoices();
-    
     try {
       // 获取克隆的声音列表
       const clonedVoices = await voiceCloneService.listVoices();
@@ -228,18 +210,18 @@ export const VoiceService = {
         voiceId: v.id,
       }));
       
-      return [...presetVoices, ...clonedProfiles];
+      return clonedProfiles;
     } catch (error) {
       console.warn('[VoiceService] 获取克隆声音列表失败:', error);
-      return presetVoices;
+      return [];
     }
   },
 
   /**
-   * 检查TTS服务是否可用
+   * 检查TTS服务是否可用（检查语音克隆服务）
    */
   checkAvailability: async (): Promise<boolean> => {
-    return edgeTTSService.checkConnection();
+    return voiceCloneService.checkConnection();
   },
 };
 
