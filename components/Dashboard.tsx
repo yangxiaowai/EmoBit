@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { SimulationType, SystemStatus, LogEntry, DashboardTab } from '../types';
 import { VoiceService, AvatarService } from '../services/api';
+import { aiService } from '../services/aiService';
 import { voiceSelectionService } from '../services/voiceSelectionService';
 import { blobToWav, getAudioDurationSeconds } from '../utils/audioUtils';
 import { healthStateService, HealthMetrics } from '../services/healthStateService';
@@ -16,30 +17,137 @@ interface DashboardProps {
 }
 
 // Mock Data - 使用 healthStateService 的基准心率
-const generateHeartRateData = () => {
-    const baseHR = 72; // 与 healthStateService 保持一致
-    return Array.from({ length: 24 }, (_, i) => ({
-        time: `${i}:00`,
-        bpm: Math.round(baseHR + Math.sin(i / 4) * 5 + (i > 18 ? 5 : 0)),
-        pressure: Math.round(120 + Math.sin(i / 3) * 8)
-    }));
-};
-const mockHeartRateData = generateHeartRateData();
-
 const mockSleepData = [
     { name: '深睡', hours: 2.5, fill: '#4f46e5' },
     { name: '浅睡', hours: 4.5, fill: '#818cf8' },
     { name: '清醒', hours: 1, fill: '#e0e7ff' },
 ];
 
+// Refactored Sub-component for Real-time Charts to prevent full Dashboard re-renders
+const RealTimeHealthCharts = () => {
+    // Initial Real-time Data (Last 60 seconds)
+    const [data, setData] = useState(() => {
+        const initial = [];
+        const now = new Date();
+        for (let i = 60; i >= 0; i--) {
+            const t = new Date(now.getTime() - i * 1000);
+            initial.push({
+                time: t.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                bpm: Math.round(75 + Math.random() * 10 - 5),
+                pressure: Math.round(120 + Math.random() * 15 - 7)
+            });
+        }
+        return initial;
+    });
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setData(prevData => {
+                const now = new Date();
+                const newPoint = {
+                    time: now.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                    bpm: Math.round(75 + Math.sin(now.getTime() / 5000) * 10 + Math.random() * 5),
+                    pressure: Math.round(120 + Math.sin(now.getTime() / 8000) * 10 + Math.random() * 5)
+                };
+                return [...prevData.slice(1), newPoint];
+            });
+        }, 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    return (
+        <div className="flex flex-col gap-6">
+            {/* Heart Rate Card */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-72">
+                <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Heart className="text-rose-500" size={18} /> 实时心率监测 (Live)</h3>
+                <div className="flex-1 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={data}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            {/* Increased interval to prevent overlap */}
+                            <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} interval={10} />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[60, 100]} width={25} />
+                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                            <Line type="monotone" dataKey="bpm" stroke="#f43f5e" strokeWidth={3} dot={false} activeDot={{ r: 5 }} isAnimationActive={false} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+
+            {/* BP Card */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-64">
+                <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Activity className="text-indigo-500" size={18} /> 实时血压监测 (Live)</h3>
+                <div className="flex-1 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={data}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                            <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} interval={10} />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[100, 140]} width={25} />
+                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                            <Line type="monotone" dataKey="pressure" stroke="#6366f1" strokeWidth={3} dot={false} activeDot={{ r: 5 }} isAnimationActive={false} />
+                        </LineChart>
+                    </ResponsiveContainer>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
     const [greeting, setGreeting] = useState<string>('');
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
+    // AI Health Report State
+    const [reportLoading, setReportLoading] = useState(false);
+    const [reportContent, setReportContent] = useState<string | null>(null);
+
+    // NLP Cognitive Report State
+    const [cognitiveLoading, setCognitiveLoading] = useState(false);
+    const [cognitiveContent, setCognitiveContent] = useState<string | null>(null);
+
+    const generateReport = async () => {
+        setReportLoading(true);
+        try {
+            // Calculate real sleep duration from mock data
+            const totalSleep = mockSleepData.reduce((acc, curr) => (curr.name === '深睡' || curr.name === '浅睡') ? acc + curr.hours : acc, 0);
+
+            // Get mock vital signs (synchronized with Chart initial state roughly)
+            const vitalSigns = {
+                bpm: 75,
+                pressure: '120/80',
+                sleep: totalSleep // Use calculated value
+            };
+            // Call the real AI service
+            const report = await aiService.generateHealthBrief(vitalSigns, []);
+            setReportContent(report);
+        } catch (error) {
+            setReportContent("生成报告时出错，请检查网络设置。");
+        } finally {
+            setReportLoading(false);
+        }
+    };
+
+    const generateCognitive = async () => {
+        setCognitiveLoading(true);
+        try {
+            const report = await aiService.generateCognitiveReport([]); // In real app, pass history
+            setCognitiveContent(report);
+        } catch (error) {
+            setCognitiveContent("分析失败");
+        } finally {
+            setCognitiveLoading(false);
+        }
+    };
+
     const mapRef = useRef<any>(null); // Leaflet map instance
     const mapContainerRef = useRef<HTMLDivElement>(null);
     const layersRef = useRef<any>(null); // LayerGroup for dynamic content
+
+    // Overview Map State
+    const overviewMapRef = useRef<any>(null);
+    const overviewMapContainerRef = useRef<HTMLDivElement>(null);
+
 
     // History Playback State
     const [historyIndex, setHistoryIndex] = useState<number>(0);
@@ -64,35 +172,78 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         return () => clearInterval(timer);
     }, []);
 
-    // Generate Mock History Data (Path with Events)
-    const historyData = useMemo(() => {
+    // Simulation State
+    const [historyData, setHistoryData] = useState<any[]>([]);
+
+    // 1. Simulator: Normal Path (Park -> Home)
+    const simulateNormalPath = () => {
         const points = [];
-        const center = [31.2235, 121.4453]; // Home
+        const home = [31.2235, 121.4453];
+        const park = [31.2260, 121.4480];
+        const now = new Date();
+        const startTime = new Date(now.getTime() - 30 * 60 * 1000); // 30 mins ago
+
+        // Walk from Park to Home
+        for (let i = 0; i <= 30; i++) {
+            const t = i / 30; // 0 to 1
+            // Linear interpolation
+            const lat = park[0] + (home[0] - park[0]) * t;
+            const lng = park[1] + (home[1] - park[1]) * t;
+
+            // Add noise
+            const noiseLat = (Math.random() - 0.5) * 0.0002;
+            const noiseLng = (Math.random() - 0.5) * 0.0002;
+
+            points.push({
+                lat: lat + noiseLat,
+                lng: lng + noiseLng,
+                time: new Date(startTime.getTime() + i * 60000),
+                event: i === 0 ? { type: 'normal', title: '🌲 公园散步', desc: '离开公园，准备回家' } : null
+            });
+        }
+        setHistoryData(points);
+        setHistoryIndex(points.length - 1);
+        setIsPlaying(true);
+    };
+
+    // 2. Simulator: Lost Path (Home -> Unknown -> Wandering)
+    const simulateLostPath = () => {
+        const points = [];
+        const home = [31.2235, 121.4453];
         const now = new Date();
         const startTime = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour ago
 
+        let currentLat = home[0];
+        let currentLng = home[1];
+
         for (let i = 0; i <= 60; i++) {
-            // Create a semi-realistic path (spiral outwards then back)
-            const t = i / 10;
-            const latOffset = (Math.sin(t) * 0.002) + (Math.random() * 0.0002);
-            const lngOffset = (Math.cos(t * 1.3) * 0.002) + (Math.random() * 0.0002);
+            // Random walk away from home
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 0.0003; // ~30m per min
+
+            currentLat += Math.sin(angle) * speed + 0.0001; // Drift North
+            currentLng += Math.cos(angle) * speed + 0.0001; // Drift East
 
             let event = null;
-            // Inject fake events
-            if (i === 42) {
-                event = { type: 'fall', title: '⚠️ 跌倒检测', desc: '检测到高G值冲击，姿态异常。' };
-            } else if (i === 25) {
-                event = { type: 'wandering', title: '🚶 异常徘徊', desc: '在此区域停留时间过长 (>10min)。' };
+            if (i === 40) {
+                event = { type: 'wandering', title: '⚠️ 疑似走失', desc: '超出安全围栏范围！' };
             }
 
             points.push({
-                lat: center[0] + latOffset,
-                lng: center[1] + lngOffset,
+                lat: currentLat,
+                lng: currentLng,
                 time: new Date(startTime.getTime() + i * 60000),
                 event
             });
         }
-        return points;
+        setHistoryData(points);
+        setHistoryIndex(points.length - 1);
+        setIsPlaying(true);
+    };
+
+    // Initial Load
+    useEffect(() => {
+        simulateNormalPath();
     }, []);
 
     // Initialize history index to end
@@ -162,6 +313,41 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 layersRef.current = null;
             }
         }
+    }, [activeTab, isSettingsOpen]);
+
+    // Initialize Overview Map
+    useEffect(() => {
+        let isCancelled = false;
+
+        const initOverviewMap = async () => {
+            if (activeTab === 'overview' && !isSettingsOpen && !overviewMapRef.current) {
+                await new Promise(r => setTimeout(r, 100));
+                const homePos: [number, number] = [121.4453, 31.2235];
+                const map = await mapService.createMap('overview-map-container', homePos);
+                if (!map || isCancelled) return;
+                overviewMapRef.current = map;
+
+                // Add Home Marker & Circle
+                mapService.addCircle(map, homePos, 300, {
+                    color: '#6366f1',
+                    fillColor: '#818cf8',
+                    dashArray: '5, 5'
+                });
+                mapService.addMarker(map, homePos, undefined, "家庭位置");
+            }
+        };
+
+        if (activeTab === 'overview' && !isSettingsOpen) {
+            initOverviewMap();
+        }
+
+        return () => {
+            isCancelled = true;
+            if ((activeTab !== 'overview' || isSettingsOpen) && overviewMapRef.current) {
+                if (overviewMapRef.current.destroy) overviewMapRef.current.destroy();
+                overviewMapRef.current = null;
+            }
+        };
     }, [activeTab, isSettingsOpen]);
 
     // Update Map Layers based on historyIndex and Simulation
@@ -421,7 +607,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         // 试听克隆声音
         const handlePreviewVoice = async () => {
             if (!clonedVoiceId) return;
-            
+
             try {
                 await VoiceService.speak('你好，我是你的数字人助手', clonedVoiceId);
             } catch (error) {
@@ -476,80 +662,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
                 <div className="p-5 space-y-6 pb-20">
 
-                    {/* 1. AIGC Digital Twin Factory (New Feature) */}
-                    <div className="bg-black rounded-[2rem] p-1 shadow-xl relative overflow-hidden group">
-                        <div className="absolute inset-0 bg-gradient-to-r from-violet-600/20 to-indigo-600/20 animate-pulse"></div>
-                        <div className="bg-slate-900 rounded-[1.8rem] p-5 relative z-10">
-                            <div className="flex justify-between items-start mb-4">
-                                <div>
-                                    <h3 className="text-white font-bold text-lg flex items-center gap-2">
-                                        <Box size={18} className="text-violet-400" /> AIGC 数字孪生工坊
-                                    </h3>
-                                    <p className="text-slate-400 text-[10px] mt-1">Unity 引擎渲染 · 高保真 3D 建模</p>
-                                </div>
-                                <div className="bg-violet-500/10 border border-violet-500/30 px-2 py-1 rounded-md text-violet-300 text-[10px] font-mono">BETA</div>
-                            </div>
 
-                            {avatarStep === 'idle' && (
-                                <div
-                                    onClick={handleCreateAvatar}
-                                    className="border-2 border-dashed border-slate-700 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer hover:border-violet-500 hover:bg-slate-800 transition-all"
-                                >
-                                    <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center mb-2">
-                                        <Upload size={20} className="text-slate-400" />
-                                    </div>
-                                    <p className="text-slate-300 text-sm font-medium">上传正面照片</p>
-                                    <p className="text-slate-500 text-[10px]">支持 JPG/PNG, 建议光线充足</p>
-                                </div>
-                            )}
-
-                            {(avatarStep !== 'idle' && avatarStep !== 'done') && (
-                                <div className="space-y-4 py-4">
-                                    <div className="flex justify-center">
-                                        <div className="w-24 h-24 rounded-full border-4 border-violet-500/30 border-t-violet-500 animate-spin relative flex items-center justify-center">
-                                            <ScanFace size={32} className="text-violet-400 animate-pulse" />
-                                        </div>
-                                    </div>
-                                    <div className="space-y-1">
-                                        <div className="flex justify-between text-xs text-violet-300 font-mono">
-                                            <span>
-                                                {avatarStep === 'uploading' && '>>> 上传云端节点...'}
-                                                {avatarStep === 'scanning' && '>>> 生成面部网格 (Mesh)...'}
-                                                {avatarStep === 'rigging' && '>>> 绑定骨骼系统 (Rigging)...'}
-                                                {avatarStep === 'rendering' && '>>> 编译纹理材质 (Shader)...'}
-                                            </span>
-                                        </div>
-                                        <div className="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                                            <div className="h-full bg-violet-500 animate-progress-indeterminate"></div>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {avatarStep === 'done' && (
-                                <div className="relative overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
-                                    <div className="aspect-video bg-gradient-to-b from-slate-700 to-slate-900 flex items-center justify-center relative">
-                                        {/* Mock 3D Model View */}
-                                        <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?q=80&w=400&auto=format&fit=crop" className="w-16 h-16 rounded-full border-2 border-white/50 object-cover z-10" />
-                                        <div className="absolute inset-0 grid grid-cols-6 grid-rows-4 opacity-10">
-                                            {Array.from({ length: 24 }).map((_, i) => <div key={i} className="border border-green-500/50"></div>)}
-                                        </div>
-                                        <div className="absolute bottom-2 right-2 flex gap-1">
-                                            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-                                            <span className="text-[8px] text-green-500 font-mono">LIVE PREVIEW</span>
-                                        </div>
-                                    </div>
-                                    <div className="p-3 flex justify-between items-center">
-                                        <div className="text-xs text-slate-300">
-                                            <p className="font-bold">模型生成成功</p>
-                                            <p className="text-[10px] text-slate-500">面数: 12,400 | 骨骼: Standard_Humanoid</p>
-                                        </div>
-                                        <button className="px-3 py-1.5 bg-violet-600 text-white text-xs rounded-lg font-bold">应用模型</button>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    </div>
 
                     {/* 2. Voice Clone Feature Card */}
                     <div className="bg-gradient-to-br from-indigo-600 to-blue-600 rounded-[2rem] p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
@@ -589,9 +702,8 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                                 <div className="bg-white/10 rounded-xl p-1 backdrop-blur-sm border border-white/20 flex gap-1">
                                     <button
                                         onClick={isRecording ? handleStopRecording : handleStartRecording}
-                                        className={`flex-1 py-3 rounded-lg font-bold text-sm shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-transform ${
-                                            isRecording ? 'bg-rose-500 text-white' : 'bg-white text-indigo-600'
-                                        }`}
+                                        className={`flex-1 py-3 rounded-lg font-bold text-sm shadow-sm flex items-center justify-center gap-2 active:scale-95 transition-transform ${isRecording ? 'bg-rose-500 text-white' : 'bg-white text-indigo-600'
+                                            }`}
                                     >
                                         <Mic size={16} />
                                         {isRecording ? '停止录音' : '开始录音'}
@@ -846,7 +958,6 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
             <div>
                 <div className="flex items-center justify-between mb-4 px-1">
                     <h3 className="font-bold text-slate-800 text-lg">健康快照</h3>
-                    <button className="text-xs font-bold text-indigo-500 bg-indigo-50 px-3 py-1.5 rounded-full hover:bg-indigo-100 transition-colors">详细报表</button>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -919,17 +1030,8 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
             {/* Location Widget */}
             <div className="bg-white rounded-[2.5rem] p-2 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.08)] border border-slate-100 cursor-pointer group" onClick={() => setActiveTab('location')}>
                 <div className="relative h-44 bg-slate-100 rounded-[2rem] overflow-hidden">
-                    {/* Map BG Pattern */}
-                    <div className="absolute inset-0 opacity-60">
-                        <svg width="100%" height="100%">
-                            <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
-                                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#e2e8f0" strokeWidth="1" />
-                            </pattern>
-                            <rect width="100%" height="100%" fill="url(#grid)" />
-                        </svg>
-                        <path d="M-10,80 Q50,60 100,80 T200,50 T300,80" fill="none" stroke="white" strokeWidth="12" />
-                        <path d="M-10,80 Q50,60 100,80 T200,50 T300,80" fill="none" stroke="#cbd5e1" strokeWidth="6" strokeDasharray="8,8" />
-                    </div>
+                    {/* Real Amap Container */}
+                    <div id="overview-map-container" ref={overviewMapContainerRef} className="w-full h-full"></div>
 
                     {/* Radar Pulse Effect */}
                     <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2">
@@ -964,36 +1066,84 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         <div className="flex flex-col gap-6 p-4 pb-24 animate-fade-in-up">
             <h2 className="text-xl font-bold text-slate-800 px-1">健康生命体征</h2>
 
-            {/* Heart Rate Card (Large) */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-72">
-                <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Heart className="text-rose-500" size={18} /> 24小时心率趋势</h3>
-                <div className="flex-1 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={mockHeartRateData}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} interval={3} />
-                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[60, 100]} width={25} />
-                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
-                            <Line type="monotone" dataKey="bpm" stroke="#f43f5e" strokeWidth={3} dot={false} activeDot={{ r: 5 }} />
-                        </LineChart>
-                    </ResponsiveContainer>
+            {/* Refactored Charts Component */}
+            <RealTimeHealthCharts />
+
+            {/* AI Health Report Card (New Feature) */}
+            <div className="bg-gradient-to-br from-violet-600 to-indigo-600 p-6 rounded-3xl shadow-lg shadow-indigo-200 text-white relative overflow-hidden group">
+                <div className="absolute top-0 right-0 w-32 h-32 bg-white opacity-10 rounded-full -mr-10 -mt-10 blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
+
+                <div className="flex items-center gap-3 mb-4 relative z-10">
+                    <div className="p-2.5 bg-white/20 backdrop-blur-md rounded-xl border border-white/20">
+                        <Sparkles size={20} className="text-yellow-300" />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-lg leading-tight">AI 综合健康日报</h3>
+                        <p className="text-[10px] text-indigo-100 opacity-90">基于生理数据与认知交互记录</p>
+                    </div>
                 </div>
+
+                {!reportContent && !reportLoading && (
+                    <div className="relative z-10">
+                        <p className="text-sm text-indigo-50 mb-4 leading-relaxed opacity-90">
+                            系统将结合今日的实时体征数据（心率/血压）与老人在应用端的语音交互、记忆回顾等行为数据，利用大模型生成综合健康评估。
+                        </p>
+                        <button
+                            onClick={generateReport}
+                            className="w-full py-3 bg-white text-indigo-600 rounded-xl font-bold text-sm shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
+                        >
+                            <Sparkles size={16} /> 生成今日分析报告
+                        </button>
+                    </div>
+                )}
+
+                {reportLoading && (
+                    <div className="flex flex-col items-center justify-center py-6 relative z-10">
+                        <Loader2 size={32} className="text-white animate-spin mb-3" />
+                        <p className="text-xs text-indigo-100 animate-pulse">正在分析多模态数据...</p>
+                    </div>
+                )}
+
+                {reportContent && (
+                    <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/10 relative z-10 animate-fade-in-up">
+                        <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-indigo-50">
+                            {reportContent}
+                        </pre>
+                        <button
+                            onClick={() => setReportContent(null)}
+                            className="mt-3 text-[10px] text-indigo-200 underline opacity-60 hover:opacity-100"
+                        >
+                            重新生成
+                        </button>
+                    </div>
+                )}
             </div>
 
-            {/* BP Card (Large) */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-64">
-                <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Activity className="text-indigo-500" size={18} /> 血压波动 (mmHg)</h3>
-                <div className="flex-1 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={mockHeartRateData.filter((_, i) => i % 4 === 0)}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-                            <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} />
-                            <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[100, 140]} />
-                            <Tooltip cursor={{ fill: '#f1f5f9' }} contentStyle={{ borderRadius: '12px', border: 'none' }} />
-                            <Bar dataKey="pressure" fill="#6366f1" radius={[4, 4, 0, 0]} barSize={16} />
-                        </BarChart>
-                    </ResponsiveContainer>
+            {/* NLP Cognitive Analysis (Alzheimer's Prevention) */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-emerald-100 rounded-lg">
+                        <Brain size={18} className="text-emerald-600" />
+                    </div>
+                    <div className="flex-1">
+                        <h3 className="text-base font-bold text-slate-800">NLP 语言认知分析</h3>
+                        <p className="text-xs text-slate-500">阿尔兹海默症早期筛查</p>
+                    </div>
+                    <button
+                        onClick={generateCognitive}
+                        disabled={cognitiveLoading}
+                        className="px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors flex items-center gap-1"
+                    >
+                        {cognitiveLoading ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+                        {cognitiveLoading ? '分析中' : '开始分析'}
+                    </button>
                 </div>
+
+                {cognitiveContent && (
+                    <div className="mt-2 p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs text-slate-600 leading-relaxed whitespace-pre-wrap animate-fade-in">
+                        {cognitiveContent}
+                    </div>
+                )}
             </div>
 
             {/* Sleep Card (Restored Circular Score) */}
@@ -1030,6 +1180,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
             <div className="h-[55%] w-full relative group">
                 <div id="guardian-map-container" ref={mapContainerRef} className="w-full h-full z-0 bg-slate-200"></div>
 
+
                 {/* Controls */}
                 <div className="absolute top-4 left-4 z-[400] bg-white/90 backdrop-blur-sm p-2 rounded-lg shadow-sm border border-slate-200">
                     <div className="text-[10px] space-y-1 text-slate-600 font-medium">
@@ -1043,6 +1194,22 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                             <div className="w-1.5 h-1.5 rounded-full bg-slate-400"></div> 历史轨迹
                         </div>
                     </div>
+                </div>
+
+                {/* Simulation Controls */}
+                <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2">
+                    <button
+                        onClick={simulateNormalPath}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
+                    >
+                        🏠 模拟: 正常回家
+                    </button>
+                    <button
+                        onClick={simulateLostPath}
+                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
+                    >
+                        ⚠️ 模拟: 迷路/走失
+                    </button>
                 </div>
 
                 {/* Timeline Slider Overlay */}
@@ -1200,42 +1367,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         </div>
     );
 
-    const LogsTab = () => (
-        <div className="flex flex-col h-full bg-slate-50 animate-fade-in-up">
-            <div className="p-6 border-b border-slate-100 bg-white">
-                <h2 className="text-xl font-bold text-slate-800">系统事件日志</h2>
-            </div>
-            <div className="flex-1 overflow-auto pb-24">
-                <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-100 sticky top-0 text-slate-500">
-                        <tr>
-                            <th className="p-4 font-semibold">时间</th>
-                            <th className="p-4 font-semibold">模块</th>
-                            <th className="p-4 font-semibold">内容</th>
-                            <th className="p-4 font-semibold text-right">状态</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 bg-white">
-                        {logs.map((log) => (
-                            <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                                <td className="p-4 text-slate-400 font-mono whitespace-nowrap">{log.timestamp.split(':').slice(0, 2).join(':')}</td>
-                                <td className="p-4 font-bold text-slate-700">{log.module}</td>
-                                <td className="p-4 text-slate-600 line-clamp-2">{log.message}</td>
-                                <td className="p-4 text-right">
-                                    <span className={`px-2 py-1 rounded text-[10px] font-bold ${log.level === 'error' ? 'bg-rose-100 text-rose-600' :
-                                        log.level === 'warn' ? 'bg-amber-100 text-amber-600' :
-                                            'bg-emerald-100 text-emerald-600'
-                                        }`}>
-                                        {log.level.toUpperCase()}
-                                    </span>
-                                </td>
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
+
 
     // --- Main Render ---
 
@@ -1271,7 +1403,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                             {activeTab === 'health' && <HealthTab />}
                             {activeTab === 'location' && <LocationTab />}
                             {activeTab === 'medication' && <MedicationTab />}
-                            {activeTab === 'logs' && <LogsTab />}
+
                         </>
                     )}
                 </div>
@@ -1284,7 +1416,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                             { id: 'health', label: '健康', icon: Heart },
                             { id: 'location', label: '定位', icon: MapPin },
                             { id: 'medication', label: '用药', icon: Pill },
-                            { id: 'logs', label: '日志', icon: FileText },
+
                         ].map((item) => {
                             const isActive = activeTab === item.id;
                             return (

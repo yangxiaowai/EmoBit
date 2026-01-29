@@ -13,6 +13,7 @@
  */
 
 import { funasrService, FunASRResult } from './funasrService';
+import { USE_MOCK_API } from './api';
 
 export interface SpeechRecognitionResult {
     text: string;
@@ -32,6 +33,11 @@ export class SpeechRecognitionService {
      * 检查 FunASR 服务是否可用
      */
     async checkConnection(): Promise<boolean> {
+        if (USE_MOCK_API) {
+            // Check if browser supports speech recognition
+            const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+            return !!SpeechRecognition;
+        }
         return await funasrService.checkConnection();
     }
 
@@ -51,6 +57,12 @@ export class SpeechRecognitionService {
         this.onResult = onResult;
         this.onError = onError || null;
 
+        if (USE_MOCK_API) {
+            console.log('[SpeechService] Using Browser Speech Recognition (Mock Mode)');
+            this.startBrowserRecognition(onResult, onError);
+            return;
+        }
+
         // 检查 FunASR 服务是否可用
         const funasrAvailable = await funasrService.checkConnection();
         if (!funasrAvailable) {
@@ -68,7 +80,7 @@ export class SpeechRecognitionService {
             console.log('[SpeechService] 准备启动 FunASR 识别...');
             console.log('[SpeechService] onResult 回调:', this.onResult ? '✅ 已设置' : '❌ 未设置');
             console.log('[SpeechService] ============================================================');
-            
+
             await funasrService.startRecognition(
                 (result: FunASRResult) => {
                     // 详细日志
@@ -78,14 +90,14 @@ export class SpeechRecognitionService {
                         isFinal: result.isFinal,
                     });
                     console.log('[SpeechService] ============================================================');
-                    
+
                     // 转换 FunASR 结果格式
                     const speechResult = {
                         text: result.text,
                         isFinal: result.isFinal,
                         confidence: undefined, // FunASR 不提供置信度
                     };
-                    
+
                     // 输出到控制台，方便调试
                     if (speechResult.isFinal && speechResult.text) {
                         console.log('='.repeat(60));
@@ -93,7 +105,7 @@ export class SpeechRecognitionService {
                         console.log(`[SpeechService] 准备传递给上层回调...`);
                         console.log('='.repeat(60));
                     }
-                    
+
                     // 检查回调是否存在
                     if (!this.onResult) {
                         console.error('[SpeechService] ❌ onResult 回调未设置！无法传递结果');
@@ -132,6 +144,16 @@ export class SpeechRecognitionService {
         }
 
         this.isRecording = false;
+
+        if (USE_MOCK_API) {
+            if (this.recognition) {
+                this.recognition.stop();
+                this.recognition = null;
+            }
+            console.log('[SpeechService-Browser] Stopped');
+            return;
+        }
+
         funasrService.stopRecognition();
         console.log('[SpeechService] 已停止识别');
     }
@@ -141,6 +163,62 @@ export class SpeechRecognitionService {
      */
     get recording(): boolean {
         return this.isRecording;
+    }
+
+    private recognition: SpeechRecognition | null = null;
+
+    private startBrowserRecognition(onResult: OnResultCallback, onError?: OnErrorCallback): void {
+        const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            const err = new Error('浏览器不支持 Web Speech API');
+            onError?.(err);
+            return;
+        }
+
+        try {
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'zh-CN';
+            recognition.continuous = true;
+            recognition.interimResults = true;
+
+            recognition.onresult = (event: SpeechRecognitionEvent) => {
+                const result = event.results[event.results.length - 1];
+                if (result) {
+                    const text = result[0].transcript;
+                    const isFinal = result.isFinal;
+
+                    console.log('[SpeechService-Browser] Result:', text, 'isFinal:', isFinal);
+                    onResult({
+                        text,
+                        isFinal
+                    });
+                }
+            };
+
+            recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+                console.error('[SpeechService-Browser] Error:', event.error);
+                onError?.(new Error(event.error));
+            };
+
+            recognition.onend = () => {
+                if (this.isRecording) {
+                    // Auto restart if supposedly still recording
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        // ignore 
+                    }
+                }
+            };
+
+            recognition.start();
+            this.recognition = recognition;
+            this.isRecording = true;
+            console.log('[SpeechService-Browser] Started');
+        } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e));
+            onError?.(err);
+        }
     }
 }
 

@@ -7,11 +7,10 @@
  */
 
 // 暂时禁用地图导入，避免启动错误
-// import AMapLoader from '@amap/amap-jsapi-loader';
-const MAP_SERVICE_DISABLED = true; // 设置为 false 以启用地图功能
-let AMapLoader: any = null;
+import AMapLoader from '@amap/amap-jsapi-loader';
 
-// 如果启用地图功能，取消注释上面的 import 并设置 MAP_SERVICE_DISABLED = false
+const MAP_SERVICE_DISABLED = false; // Enable map functionality
+// let AMapLoader: any = null;
 
 // 类型定义
 export interface LngLat {
@@ -129,6 +128,8 @@ class MapService {
             return false;
         }
     }
+
+
 
     /**
      * 地址转坐标（地理编码）
@@ -380,14 +381,18 @@ class MapService {
             return null;
         }
 
-        // @ts-ignore
-        const map = new window.AMap.Map(containerId, {
-            zoom: 17,
-            center: center,
-            viewMode: '3D',
-        });
-
-        return map;
+        try {
+            // @ts-ignore
+            const map = new window.AMap.Map(containerId, {
+                zoom: 17,
+                center: center,
+                viewMode: '3D',
+            });
+            return map;
+        } catch (e) {
+            console.error('[MapService] 地图创建失败:', e);
+            return null;
+        }
     }
 
     /**

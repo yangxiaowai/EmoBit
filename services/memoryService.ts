@@ -78,6 +78,23 @@ export class MemoryService {
     }
 
     /**
+     * 根据位置获取附近的记忆锚点
+     * @param lat 纬度
+     * @param lng 经度
+     * @param maxDistance 最大距离（米），默认 5000米
+     */
+    getMemoriesByLocation(lat: number, lng: number, maxDistance: number = 5000): MemoryAnchor[] {
+        return this.anchors
+            .map(anchor => ({
+                anchor,
+                distance: this.calculateDistance(lat, lng, anchor.location.lat, anchor.location.lng)
+            }))
+            .filter(item => item.distance <= maxDistance)
+            .sort((a, b) => a.distance - b.distance)
+            .map(item => item.anchor);
+    }
+
+    /**
      * 开始位置监控
      */
     startWatching(): void {

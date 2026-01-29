@@ -10,10 +10,11 @@ interface SmartAvatarProps {
     size?: 'small' | 'medium' | 'large';
     showStatus?: boolean;             // 是否显示状态信息
     onClick?: () => void;
+    mode?: 'cartoon' | 'realistic';   // 模式：卡通/写实
 }
 
 /**
- * 智能3D头像组件
+ * 智能3D/写实头像组件
  * 根据健康状态动态调整表情和动画
  */
 const SmartAvatar: React.FC<SmartAvatarProps> = ({
@@ -25,16 +26,18 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
     size = 'medium',
     showStatus = true,
     onClick,
+    mode = 'realistic', // 默认为写实模式 (孙辈形象)
 }) => {
     const [avatarState, setAvatarState] = useState<AvatarState>(healthStateService.getAvatarState());
+
+    // 默认写实头像 (孙辈)
+    const DEFAULT_REALISTIC_AVATAR = '/avatar_grandchild.png';
 
     // 订阅健康状态变化
     useEffect(() => {
         const unsubscribe = healthStateService.subscribe(setAvatarState);
-
         // 启动模拟数据（演示用）
         const stopSimulation = healthStateService.startSimulation();
-
         return () => {
             unsubscribe();
             stopSimulation();
@@ -52,220 +55,157 @@ const SmartAvatar: React.FC<SmartAvatarProps> = ({
     const sizeMap = {
         small: { container: 'w-24 h-28', avatar: 'w-20 h-20', bpm: 'text-xs' },
         medium: { container: 'w-40 h-48', avatar: 'w-32 h-32', bpm: 'text-sm' },
-        large: { container: 'w-56 h-64', avatar: 'w-48 h-48', bpm: 'text-base' },
+        large: { container: 'w-64 h-72', avatar: 'w-56 h-56', bpm: 'text-base' }, // 稍微调大一点
     };
 
     const sizeClasses = sizeMap[size];
 
-    // 获取肤色样式
+    // 获取肤色样式 (仅卡通模式)
     const getSkinToneClass = () => {
         switch (avatarState.skinTone) {
-            case 'pale':
-                return 'opacity-75 saturate-50';
-            case 'flushed':
-                return 'saturate-125 brightness-105';
-            default:
-                return '';
+            case 'pale': return 'opacity-75 saturate-50';
+            case 'flushed': return 'saturate-125 brightness-105';
+            default: return '';
         }
     };
 
-    // 获取姿态样式
-    const getPostureTransform = () => {
-        switch (avatarState.posture) {
-            case 'slouched':
-                return 'translateY(8px) scale(0.95)';
-            case 'upright':
-                return 'translateY(-4px) scale(1.02)';
-            default:
-                return '';
-        }
-    };
-
-    // 获取眼睛样式
-    const getEyeStyle = () => {
-        switch (avatarState.eyeState) {
-            case 'wide':
-                return { scaleY: 1.2 };
-            case 'droopy':
-                return { scaleY: 0.7 };
-            case 'closed':
-                return { scaleY: 0.1 };
-            default:
-                return { scaleY: 1 };
-        }
-    };
-
-    // 获取心情对应的表情
+    // 获取心情对应的表情 (仅显示在状态栏)
     const getMoodEmoji = () => {
         switch (avatarState.mood) {
-            case 'happy':
-                return '😊';
-            case 'tired':
-                return '😮‍💨';
-            case 'worried':
-                return '😟';
-            case 'sleepy':
-                return '😴';
-            default:
-                return '😌';
+            case 'happy': return '😊';
+            case 'tired': return '😮‍💨';
+            case 'worried': return '😟';
+            case 'sleepy': return '😴';
+            default: return '😌';
         }
     };
 
     // 获取警报级别颜色
     const getAlertColor = () => {
         switch (avatarState.alertLevel) {
-            case 'critical':
-                return 'bg-red-500 animate-pulse';
-            case 'warning':
-                return 'bg-amber-500';
-            case 'attention':
-                return 'bg-blue-500';
-            default:
-                return 'bg-emerald-500';
+            case 'critical': return 'bg-red-500 animate-pulse';
+            case 'warning': return 'bg-amber-500';
+            case 'attention': return 'bg-blue-500';
+            default: return 'bg-emerald-500';
         }
     };
 
-    // 获取呼吸动画
-    const getBreathingAnimation = () => {
-        switch (avatarState.animation) {
-            case 'breathing_fast':
-                return 'animate-[breathing_1s_ease-in-out_infinite]';
-            case 'breathing_slow':
-                return 'animate-[breathing_4s_ease-in-out_infinite]';
-            default:
-                return 'animate-[breathing_2.5s_ease-in-out_infinite]';
-        }
+    // 写实模式动画样式
+    const getRealisticStyle = () => {
+        let transform = 'scale(1)';
+        let filter = 'brightness(1)';
+
+        // 呼吸动画
+        const breathing = isTalking ? '' : 'animate-[breathing_3s_ease-in-out_infinite]';
+
+        // 说话动画 (简单的缩放模拟)
+        const talking = isTalking ? 'animate-[talking_0.2s_ease-in-out_infinite]' : '';
+
+        // 状态滤镜
+        if (avatarState.alertLevel === 'critical') filter = 'sepia(0.5) hue-rotate(-50deg) saturate(2)'; // 偏红
+
+        return {
+            className: `${breathing} ${talking}`,
+            style: { filter }
+        };
     };
 
     // 计算心率显示
     const heartRate = metrics?.heartRate || 72;
+    const finalImageUrl = customImageUrl || (mode === 'realistic' ? DEFAULT_REALISTIC_AVATAR : null);
 
     return (
         <div
-            className={`relative ${sizeClasses.container} flex flex-col items-center cursor-pointer`}
+            className={`relative ${sizeClasses.container} flex flex-col items-center cursor-pointer select-none`}
             onClick={onClick}
         >
             {/* 主体容器 */}
-            <div
-                className={`relative ${sizeClasses.avatar} ${getBreathingAnimation()}`}
-                style={{ transform: getPostureTransform() }}
-            >
-                {/* 外层光晕 (根据状态变化) */}
-                <div
-                    className={`absolute inset-0 rounded-[40%_40%_45%_45%] blur-xl transition-all duration-1000
-            ${avatarState.alertLevel === 'critical' ? 'bg-red-200' :
-                            avatarState.alertLevel === 'warning' ? 'bg-amber-200' :
-                                'bg-gradient-to-br from-indigo-200 to-blue-200'}`}
-                    style={{ transform: 'scale(1.1)' }}
-                />
+            <div className={`relative ${sizeClasses.avatar} transition-all duration-500`}>
 
-                {/* 头像主体 */}
-                <div
-                    className={`relative w-full h-full rounded-[40%_40%_45%_45%] 
-            bg-gradient-to-br from-slate-100 via-slate-50 to-white
-            shadow-lg border border-slate-200/50 overflow-hidden transition-all duration-500
-            ${getSkinToneClass()}`}
-                >
-                    {/* 自定义头像图片 */}
-                    {customImageUrl && (
+                {/* 写实模式 / 自定义图片 */}
+                {finalImageUrl ? (
+                    <div className="relative w-full h-full rounded-full overflow-hidden shadow-xl border-4 border-white ring-2 ring-slate-100">
                         <img
-                            src={customImageUrl}
+                            src={finalImageUrl}
                             alt="Avatar"
-                            className="absolute inset-0 w-full h-full object-cover rounded-[40%_40%_45%_45%]"
+                            className={`w-full h-full object-cover transition-transform duration-300 ${getRealisticStyle().className}`}
+                            style={getRealisticStyle().style}
                         />
-                    )}
 
-                    {/* 默认表情 (无自定义图片时) */}
-                    {!customImageUrl && (
+                        {/* 聆听指示器 (光晕) */}
+                        {isListening && (
+                            <div className="absolute inset-0 rounded-full border-4 border-indigo-400 animate-pulse bg-indigo-500/10" />
+                        )}
+
+                        {/* 思考指示器 (Overlay) */}
+                        {isThinking && !isListening && (
+                            <div className="absolute inset-0 bg-white/30 flex items-center justify-center animate-pulse">
+                                <span className="text-2xl">🤔</span>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    // 卡通模式 (原 SVG/CSS 实现)
+                    <div
+                        className={`relative w-full h-full rounded-[40%_40%_45%_45%] 
+                        bg-gradient-to-br from-slate-100 via-slate-50 to-white
+                        shadow-lg border border-slate-200/50 overflow-hidden transition-all duration-500
+                        ${getSkinToneClass()}`}
+                    >
+                        {/* 默认表情 (绘制) */}
                         <>
                             {/* 眼睛 */}
                             <div className="absolute top-[35%] left-1/2 -translate-x-1/2 flex gap-4">
-                                <div
-                                    className="w-2 h-3 bg-slate-700 rounded-full transition-transform duration-300"
-                                    style={{ transform: `scaleY(${getEyeStyle().scaleY})` }}
-                                />
-                                <div
-                                    className="w-2 h-3 bg-slate-700 rounded-full transition-transform duration-300"
-                                    style={{ transform: `scaleY(${getEyeStyle().scaleY})` }}
-                                />
+                                <div className="w-2 h-3 bg-slate-700 rounded-full" />
+                                <div className="w-2 h-3 bg-slate-700 rounded-full" />
                             </div>
 
                             {/* 嘴巴 */}
                             <div
                                 className={`absolute top-[55%] left-1/2 -translate-x-1/2 transition-all duration-300
-                  ${isTalking ? 'w-4 h-4 rounded-full bg-slate-600 animate-[talk_0.15s_ease-in-out_infinite]' :
-                                        isThinking ? 'w-3 h-3 rounded-full bg-amber-400/80 animate-pulse' :
+                                ${isTalking ? 'w-4 h-4 rounded-full bg-slate-600 animate-[talk_0.15s_ease-in-out_infinite]' :
                                         avatarState.mood === 'happy' ? 'w-6 h-3 rounded-b-full border-b-2 border-slate-600' :
-                                            avatarState.mood === 'worried' ? 'w-4 h-2 rounded-t-full border-t-2 border-slate-600' :
-                                                'w-5 h-0.5 bg-slate-500 rounded-full'}`}
+                                            'w-5 h-0.5 bg-slate-500 rounded-full'}`}
                             />
-
-                            {/* 腮红 (开心时) */}
-                            {avatarState.mood === 'happy' && (
-                                <>
-                                    <div className="absolute top-[45%] left-[20%] w-3 h-2 bg-pink-200 rounded-full opacity-60" />
-                                    <div className="absolute top-[45%] right-[20%] w-3 h-2 bg-pink-200 rounded-full opacity-60" />
-                                </>
-                            )}
                         </>
-                    )}
-
-                    {/* 聆听 / 思考指示器 */}
-                    {isListening && (
-                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2">
-                            <div className="flex gap-1">
-                                <div className="w-1.5 h-3 bg-indigo-500 rounded-full animate-[wave_0.5s_ease-in-out_infinite_0ms]" />
-                                <div className="w-1.5 h-4 bg-indigo-500 rounded-full animate-[wave_0.5s_ease-in-out_infinite_100ms]" />
-                                <div className="w-1.5 h-3 bg-indigo-500 rounded-full animate-[wave_0.5s_ease-in-out_infinite_200ms]" />
-                            </div>
-                        </div>
-                    )}
-                    {isThinking && !isListening && (
-                        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 flex gap-1">
-                            <div className="w-1.5 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '0ms' }} />
-                            <div className="w-1.5 h-2.5 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '150ms' }} />
-                            <div className="w-1.5 h-2 bg-amber-400 rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
-                        </div>
-                    )}
-                </div>
+                    </div>
+                )}
 
                 {/* 心率显示 */}
                 <div
-                    className={`absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 
-            ${sizeClasses.bpm} font-mono text-rose-400 pointer-events-none
-            ${isTalking || isListening || isThinking ? 'opacity-0' : 'opacity-70'}`}
+                    className={`absolute -bottom-6 left-1/2 -translate-x-1/2 
+                    ${sizeClasses.bpm} font-mono text-rose-400 font-bold whitespace-nowrap
+                    ${isTalking ? 'opacity-0' : 'opacity-100'} transition-opacity`}
                 >
                     <span className="animate-pulse">❤️</span> {heartRate} BPM
                 </div>
 
                 {/* 状态指示点 */}
-                <div className={`absolute -top-1 -right-1 w-4 h-4 ${getAlertColor()} rounded-full border-2 border-white shadow-sm`} />
+                <div className={`absolute top-0 right-0 w-4 h-4 ${getAlertColor()} rounded-full border-2 border-white shadow-sm z-10`} />
             </div>
 
             {/* 状态消息 */}
-            {showStatus && avatarState.message && (
-                <div className="mt-3 px-3 py-1.5 bg-white/90 backdrop-blur-sm rounded-full shadow-sm text-xs text-slate-600 max-w-full truncate">
+            {showStatus && avatarState.message && !isTalking && (
+                <div className="absolute top-[-20px] left-1/2 -translate-x-1/2 px-3 py-1 bg-white/90 backdrop-blur-sm rounded-full shadow-md text-xs text-slate-600 whitespace-nowrap border border-slate-100">
                     {getMoodEmoji()} {avatarState.message}
                 </div>
             )}
 
             {/* CSS动画定义 */}
             <style>{`
-        @keyframes breathing {
-          0%, 100% { transform: scale(1) ${getPostureTransform()}; }
-          50% { transform: scale(1.02) ${getPostureTransform()}; }
-        }
-        
-        @keyframes talk {
-          0%, 100% { transform: translate(-50%, 0) scaleY(1); }
-          50% { transform: translate(-50%, 0) scaleY(0.5); }
-        }
-        
-        @keyframes wave {
-          0%, 100% { transform: scaleY(0.5); }
-          50% { transform: scaleY(1); }
-        }
-      `}</style>
+                @keyframes breathing {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.03); }
+                }
+                @keyframes talking {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.02); filter: brightness(1.05); }
+                }
+                @keyframes talk {
+                    0%, 100% { transform: translate(-50%, 0) scaleY(1); }
+                    50% { transform: translate(-50%, 0) scaleY(0.5); }
+                }
+            `}</style>
         </div>
     );
 };

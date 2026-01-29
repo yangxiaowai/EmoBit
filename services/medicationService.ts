@@ -38,7 +38,7 @@ export interface MedicationReminder {
 
 // 服药事件
 export interface MedicationEvent {
-    type: 'reminder' | 'taken' | 'missed' | 'snooze';
+    type: 'reminder' | 'taken' | 'missed' | 'snooze' | 'box_open' | 'pillbox_connected';
     medication: Medication;
     scheduledTime: string;
     timestamp: Date;
@@ -395,12 +395,66 @@ class MedicationService {
     }
 
     /**
+     * 连接智能药盒
+     */
+    connectSmartPillbox(pillboxId: string): void {
+        console.log('[Medication] 连接智能药盒:', pillboxId);
+        // 模拟药盒连接
+        setTimeout(() => {
+            console.log('[Medication] 智能药盒已连接');
+            this.notify({
+                type: 'pillbox_connected',
+                medication: this.medications[0], // 示例
+                scheduledTime: '',
+                timestamp: new Date()
+            } as any);
+        }, 1000);
+    }
+
+    /**
+     * 处理智能药盒事件
+     */
+    handlePillboxEvent(event: { type: 'open' | 'close' | 'taken', medicationId: string }): void {
+        console.log('[Medication] 收到药盒事件:', event);
+        if (event.type === 'taken') {
+            this.confirmTaken(event.medicationId);
+        }
+    }
+
+    /**
      * 模拟服药提醒（演示用）
      */
     simulateReminder(): void {
         const med = this.medications[0];
         if (med) {
             this.triggerReminder(med, new Date().toTimeString().slice(0, 5));
+        }
+    }
+
+    /**
+     * 模拟打开药盒
+     */
+    simulateBoxOpen(): void {
+        console.log('[Medication] 模拟打开药盒');
+        // 语音反馈
+        VoiceService.speak("您打开了药盒，是准备服药吗？").catch(console.error);
+
+        this.notify({
+            type: 'box_open',
+            medication: this.medications[0],
+            scheduledTime: new Date().toTimeString().slice(0, 5),
+            timestamp: new Date()
+        });
+    }
+
+    /**
+     * 模拟取药
+     */
+    simulatePillTaken(medId?: string): void {
+        const med = medId ? this.medications.find(m => m.id === medId) : this.medications[0];
+        if (med) {
+            console.log('[Medication] 模拟取走药物:', med.name);
+            this.confirmTaken(med.id);
         }
     }
 }

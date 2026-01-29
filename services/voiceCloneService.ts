@@ -4,6 +4,8 @@
  * IndexTTS2: https://github.com/index-tts/index-tts
  */
 
+import { USE_MOCK_API } from './api';
+
 export interface VoiceCloneConfig {
     id: string;
     name: string;
@@ -44,6 +46,13 @@ class VoiceCloneService {
                 resolve(ok);
             };
             try {
+                if (USE_MOCK_API) {
+                    // Mock mode always returns true but doesn't actually connect
+                    console.log('[VoiceClone-MOCK] checkConnection: 模拟模式，跳过连接检查');
+                    resolve(true);
+                    return;
+                }
+
                 console.log('[VoiceClone] checkConnection: 连接中...', this.wsUrl);
                 const testWs = new WebSocket(this.wsUrl);
                 testWs.onopen = () => {
@@ -104,6 +113,19 @@ class VoiceCloneService {
      */
     private async sendRequest(action: string, data: any): Promise<any> {
         return new Promise((resolve, reject) => {
+            if (USE_MOCK_API) {
+                // Mock response for requests
+                console.log(`[VoiceClone-MOCK] sendRequest: ${action} - 模拟成功`);
+                if (action === 'check_status') {
+                    resolve({ success: true, model_ready: true, has_model: true });
+                } else if (action === 'list_voices') {
+                    resolve({ success: true, voices: [] });
+                } else {
+                    resolve({ success: true });
+                }
+                return;
+            }
+
             try {
                 const reqId = ++this.requestId;
                 const payload = { action, ...data };
@@ -158,7 +180,7 @@ class VoiceCloneService {
                     console.error('[VoiceClone] sendRequest: WS 错误', e, 'readyState=', ws.readyState);
                     try {
                         ws.close();
-                    } catch {}
+                    } catch { }
                     reject(new Error('语音克隆服务连接失败，请确保 voice_clone_server 已启动'));
                 };
 

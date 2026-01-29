@@ -8,7 +8,7 @@ import { voiceCloneService } from './voiceCloneService';
 import { voiceSelectionService } from './voiceSelectionService';
 
 // 配置：设置为 false 以启用真实 API 调用
-const USE_MOCK_API = false;
+export const USE_MOCK_API = true;
 
 /** 克隆常用句，预拉后服务端缓存命中可近即时播放 */
 const COMMON_CLONE_PHRASES = [
@@ -33,7 +33,7 @@ export const VoiceService = {
     try {
       console.log('[VoiceService] cloneVoice: 检查服务连接...');
       const isAvailable = await voiceCloneService.checkConnection();
-      
+
       if (!isAvailable) {
         console.warn('[VoiceService] 语音克隆服务不可用');
         throw new Error('语音克隆服务不可用，请确保语音克隆服务器正在运行');
@@ -41,7 +41,7 @@ export const VoiceService = {
 
       const voiceId = `cloned_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       console.log('[VoiceService] cloneVoice: 注册声音', { voiceId, name, blobSize: audioBlob.size });
-      
+
       const config = await voiceCloneService.registerVoice(
         audioBlob,
         voiceId,
@@ -120,6 +120,38 @@ export const VoiceService = {
     voiceProfile?: VoiceProfile,
     onEnded?: () => void
   ): Promise<void> => {
+    if (USE_MOCK_API) {
+      console.log(`[VoiceService-MOCK] 正在播放语音: "${text}"`);
+
+      // Use browser's native Web Speech API for audible mock output
+      return new Promise<void>((resolve) => {
+        // Cancel any pending speech
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 1.0;
+
+        utterance.onend = () => {
+          console.log('[VoiceService-MOCK] 播放结束');
+          onEnded?.();
+          resolve();
+        };
+
+        utterance.onerror = (e) => {
+          console.error('[VoiceService-MOCK] 播放错误', e);
+          // Fallback to timeout if speech synthesis fails
+          const duration = Math.min(Math.max(text.length * 200, 1000), 5000);
+          setTimeout(() => {
+            onEnded?.();
+            resolve();
+          }, duration);
+        };
+
+        window.speechSynthesis.speak(utterance);
+      });
+    }
+
     try {
       const id = voiceId ?? voiceSelectionService.getSelectedVoiceId();
       if (!id || !id.startsWith('cloned_')) {
@@ -138,6 +170,10 @@ export const VoiceService = {
   },
 
   stop: (): void => {
+    if (USE_MOCK_API) {
+      window.speechSynthesis.cancel();
+      return;
+    }
     voiceCloneService.stop();
   },
 
@@ -161,10 +197,10 @@ export const VoiceService = {
       return VoiceService.speak(t, voiceId, voiceProfile, onEnded);
     }
     const id = voiceId ?? voiceSelectionService.getSelectedVoiceId();
-    if (!id) {
+    if (!id && !USE_MOCK_API) {
       throw new Error('必须使用克隆声音，请先克隆一个声音');
     }
-    
+
     const run = async (i: number): Promise<void> => {
       if (i >= segs.length) {
         onEnded?.();
@@ -192,7 +228,7 @@ export const VoiceService = {
    */
   preloadClonePhrases: (voiceId: string): void => {
     if (!voiceId.startsWith('cloned_')) return;
-    voiceCloneService.preloadPhrases(voiceId, COMMON_CLONE_PHRASES).catch(() => {});
+    voiceCloneService.preloadPhrases(voiceId, COMMON_CLONE_PHRASES).catch(() => { });
   },
 
   /**
@@ -209,7 +245,7 @@ export const VoiceService = {
         isCloned: true,
         voiceId: v.id,
       }));
-      
+
       return clonedProfiles;
     } catch (error) {
       console.warn('[VoiceService] 获取克隆声音列表失败:', error);
