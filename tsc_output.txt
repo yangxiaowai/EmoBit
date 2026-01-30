@@ -1,6 +1,0 @@
-﻿components/ElderlyApp.tsx(3,24): error TS2307: Cannot find module 'three' or its corresponding type declarations.
-services/speechService.ts(21,35): error TS2304: Cannot find name 'SpeechRecognition'.
-services/speechService.ts(22,41): error TS2304: Cannot find name 'SpeechRecognition'.
-services/speechService.ts(27,26): error TS2304: Cannot find name 'SpeechRecognition'.
-services/speechService.ts(74,49): error TS2552: Cannot find name 'SpeechRecognitionEvent'. Did you mean 'SpeechRecognitionService'?
-services/speechService.ts(90,48): error TS2552: Cannot find name 'SpeechRecognitionErrorEvent'. Did you mean 'SpeechRecognitionService'?

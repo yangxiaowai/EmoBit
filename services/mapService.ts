@@ -42,6 +42,23 @@ export interface GeocodeResult {
     error?: string;
 }
 
+/** 逆地理编码结果：坐标 -> 详细地址 */
+export interface ReverseGeocodeResult {
+    success: boolean;
+    formattedAddress?: string;
+    addressComponent?: {
+        province?: string;
+        city?: string;
+        citycode?: string;
+        district?: string;
+        adcode?: string;
+        township?: string;
+        street?: string;
+        streetNumber?: string;
+    };
+    error?: string;
+}
+
 // 高德地图AMap类型（简化版）
 interface AMapInstance {
     plugin: (plugins: string[], callback: () => void) => void;
@@ -70,6 +87,10 @@ interface DrivingService {
 interface GeocoderService {
     getLocation: (
         address: string,
+        callback: (status: string, result: any) => void
+    ) => void;
+    getAddress: (
+        lnglat: [number, number] | { lng: number; lat: number },
         callback: (status: string, result: any) => void
     ) => void;
 }
@@ -152,6 +173,42 @@ class MapService {
                     });
                 } else {
                     resolve({ success: false, error: '地址解析失败' });
+                }
+            });
+        });
+    }
+
+    /**
+     * 逆地理编码：坐标转详细地址（供家属定位用）
+     */
+    async reverseGeocode(lng: number, lat: number): Promise<ReverseGeocodeResult> {
+        if (!await this.init()) {
+            return { success: false, error: '地图服务未初始化' };
+        }
+
+        return new Promise((resolve) => {
+            const geocoder = new this.AMap!.Geocoder({ radius: 500 });
+            geocoder.getAddress([lng, lat], (status, result) => {
+                if (status === 'complete' && result.regeocode) {
+                    const regeo = result.regeocode;
+                    resolve({
+                        success: true,
+                        formattedAddress: regeo.formattedAddress,
+                        addressComponent: regeo.addressComponent
+                            ? {
+                                province: regeo.addressComponent.province,
+                                city: regeo.addressComponent.city,
+                                citycode: regeo.addressComponent.citycode,
+                                district: regeo.addressComponent.district,
+                                adcode: regeo.addressComponent.adcode,
+                                township: regeo.addressComponent.township,
+                                street: regeo.addressComponent.street,
+                                streetNumber: regeo.addressComponent.streetNumber,
+                            }
+                            : undefined,
+                    });
+                } else {
+                    resolve({ success: false, error: '逆地理编码失败' });
                 }
             });
         });

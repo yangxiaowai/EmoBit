@@ -16,6 +16,198 @@ interface DashboardProps {
     logs: LogEntry[];
 }
 
+/** 定位 Tab 内容：独立组件保证引用稳定，避免父组件重渲染时卸载导致地图容器被销毁 */
+interface LocationTabContentProps {
+    mapContainerRef: React.RefObject<HTMLDivElement | null>;
+    historyData: { lat: number; lng: number; time: Date; event?: { type: string; title: string; desc?: string } }[];
+    historyIndex: number;
+    setHistoryIndex: (v: number | ((prev: number) => number)) => void;
+    isPlaying: boolean;
+    setIsPlaying: (v: boolean) => void;
+    trajectoryLoading: boolean;
+    simulateNormalPath: () => void;
+    simulateLostPath: () => void;
+    resetToCurrentLocation: () => void;
+    playbackIntervalRef: React.MutableRefObject<ReturnType<typeof setInterval> | null>;
+    POINT_INTERVAL_SEC: number;
+    simulation: SimulationType;
+    displayAddress: string;
+    addressLoading?: boolean;
+    /** 经纬度文案：有轨迹时为当前点，无轨迹时为预设模拟位置（与紫色点一致） */
+    latLngText: string;
+}
+
+const LocationTabContent: React.FC<LocationTabContentProps> = ({
+    mapContainerRef,
+    historyData,
+    historyIndex,
+    setHistoryIndex,
+    isPlaying,
+    setIsPlaying,
+    trajectoryLoading,
+    simulateNormalPath,
+    simulateLostPath,
+    resetToCurrentLocation,
+    playbackIntervalRef,
+    POINT_INTERVAL_SEC,
+    simulation,
+    displayAddress,
+    addressLoading = false,
+    latLngText,
+}) => (
+    <div className="flex flex-col h-full bg-slate-50">
+        <div className="h-[55%] w-full relative group">
+            <div id="guardian-map-container" ref={mapContainerRef} className="w-full h-full z-0 bg-slate-200"></div>
+            <div className="absolute top-4 left-4 z-[400] bg-white/90 backdrop-blur-sm p-2 rounded-lg shadow-sm border border-slate-200">
+                <div className="text-[10px] space-y-1 text-slate-600 font-medium">
+                    <div className="flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> 电子围栏
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div> 实时位置
+                    </div>
+                    <div className="flex items-center gap-1.5 text-slate-400">
+                        <div className="w-1.5 h-1.5 rounded-full bg-slate-400"></div> 历史轨迹
+                    </div>
+                </div>
+            </div>
+            <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2">
+                <button
+                    onClick={simulateNormalPath}
+                    disabled={trajectoryLoading}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
+                >
+                    {trajectoryLoading ? '生成中…' : '🏠 模拟: 正常轨迹 (12h)'}
+                </button>
+                <button
+                    onClick={simulateLostPath}
+                    disabled={trajectoryLoading}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
+                >
+                    {trajectoryLoading ? '生成中…' : '⚠️ 模拟: 疑似走失 (12h)'}
+                </button>
+                <button
+                    onClick={resetToCurrentLocation}
+                    disabled={historyData.length === 0}
+                    className="px-3 py-1.5 bg-slate-500 hover:bg-slate-600 disabled:opacity-50 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left flex items-center gap-1"
+                >
+                    <ArrowLeft size={12} /> 返回当前位置
+                </button>
+            </div>
+            <div className="absolute bottom-4 left-4 right-4 z-[400] bg-white/95 backdrop-blur-md p-3 rounded-xl shadow-lg border border-slate-200/60">
+                <div className="flex items-center gap-3 mb-1">
+                    <button
+                        type="button"
+                        onClick={() => {
+                            if (historyData.length === 0) return;
+                            if (isPlaying && playbackIntervalRef.current) {
+                                clearInterval(playbackIntervalRef.current);
+                                playbackIntervalRef.current = null;
+                            }
+                            setIsPlaying(!isPlaying);
+                        }}
+                        disabled={historyData.length === 0}
+                        className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 shadow-md transition-colors"
+                    >
+                        {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
+                    </button>
+                    <div className="flex-1">
+                        <div className="flex justify-between text-[10px] font-bold text-slate-500 mb-1">
+                            <span className="text-slate-400">
+                                {historyData.length > 0 ? historyData[0].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'}
+                            </span>
+                            <span className="text-indigo-600">
+                                {historyData.length > 0 && historyData[historyIndex]
+                                    ? historyData[historyIndex].time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                                    : '--'}
+                            </span>
+                            {historyData.length > 0 && historyIndex === historyData.length - 1 && (
+                                <span className="px-1 py-0.5 bg-red-100 text-red-600 rounded text-[9px]">LIVE</span>
+                            )}
+                        </div>
+                        <input
+                            type="range"
+                            min={0}
+                            max={Math.max(0, historyData.length - 1)}
+                            value={historyData.length ? Math.min(historyIndex, historyData.length - 1) : 0}
+                            onChange={(e) => {
+                                if (playbackIntervalRef.current) {
+                                    clearInterval(playbackIntervalRef.current);
+                                    playbackIntervalRef.current = null;
+                                }
+                                setIsPlaying(false);
+                                setHistoryIndex(Number(e.target.value));
+                            }}
+                            disabled={historyData.length === 0}
+                            className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600 disabled:opacity-50"
+                        />
+                        {historyData.length > 0 && (
+                            <p className="text-[9px] text-slate-400 mt-0.5">
+                                共 {historyData.length} 点 · 每点 {POINT_INTERVAL_SEC} 秒 · 回溯 12 小时
+                            </p>
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 pb-20 space-y-4">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <MapPin size={14} /> 地理编码解析
+                </h3>
+                <div className="mb-3">
+                    <p className="text-lg font-bold text-slate-800 leading-tight">
+                        {displayAddress}
+                        {addressLoading && <span className="text-slate-400 font-normal text-sm ml-1">(解析中…)</span>}
+                    </p>
+                    <p className="text-xs text-slate-500 font-mono mt-1">
+                        {latLngText}
+                    </p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-slate-50 p-2 rounded-xl text-center">
+                        <p className="text-[10px] text-slate-400">海拔</p>
+                        <p className="font-bold text-slate-700">12m</p>
+                    </div>
+                    <div className="bg-slate-50 p-2 rounded-xl text-center">
+                        <p className="text-[10px] text-slate-400">移动速度</p>
+                        <p className="font-bold text-slate-700">{isPlaying ? '4.2 km/h' : '0 km/h'}</p>
+                    </div>
+                </div>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+                <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                    <Brain size={14} /> 多模态环境感知
+                </h3>
+                <div className="w-full h-32 bg-slate-100 rounded-xl overflow-hidden mb-3 relative group">
+                    <img
+                        src={simulation === SimulationType.WANDERING
+                            ? "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?q=80&w=600&auto=format&fit=crop"
+                            : "https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=600&auto=format&fit=crop"
+                        }
+                        alt="View"
+                        className="w-full h-full object-cover"
+                    />
+                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur text-white text-[10px] px-2 py-1 rounded-md flex items-center gap-1">
+                        <Eye size={10} /> 视觉模态
+                    </div>
+                </div>
+                <div className="flex gap-3">
+                    <div className="w-1 bg-indigo-500 rounded-full shrink-0"></div>
+                    <div>
+                        <p className="text-xs text-slate-400 font-bold mb-1">环境语义分析 (Gemini)</p>
+                        <p className="text-sm text-slate-700 leading-relaxed">
+                            {simulation === SimulationType.WANDERING
+                                ? "检测到用户处于繁忙十字路口附近。视觉分析显示车流量较大。建议立即介入。"
+                                : "用户处于熟悉的家庭环境中。光照充足，地面无障碍物。环境安全评级：优。"}
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
 // Mock Data - 使用 healthStateService 的基准心率
 const mockSleepData = [
     { name: '深睡', hours: 2.5, fill: '#4f46e5' },
@@ -142,7 +334,15 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
     const mapRef = useRef<any>(null); // Leaflet map instance
     const mapContainerRef = useRef<HTMLDivElement>(null);
-    const layersRef = useRef<any>(null); // LayerGroup for dynamic content
+    const layersRef = useRef<any>(null); // 已废弃：轨迹改用稳定 ref 更新
+    const pastPolylineRef = useRef<any>(null);
+    const futurePolylineRef = useRef<any>(null);
+    const userMarkerRef = useRef<any>(null);
+    /** 返回当前位置时显示的模拟“实时位置”点（美丽园小区内，与图例 indigo 一致） */
+    const currentLocationMarkerRef = useRef<any>(null);
+    /** 事件点标记：创建一次，仅通过 show(idx <= historyIndex) 显隐，避免闪烁 */
+    const eventMarkersRef = useRef<{ marker: any; eventIndex: number }[]>([]);
+    const lastHistoryDataForEventsRef = useRef<any[] | null>(null);
 
     // Overview Map State
     const overviewMapRef = useRef<any>(null);
@@ -152,6 +352,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     // History Playback State
     const [historyIndex, setHistoryIndex] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState(false);
+    const playbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const statusColor = status === SystemStatus.CRITICAL ? 'rose' : status === SystemStatus.WARNING ? 'amber' : 'emerald';
     const StatusIcon = status === SystemStatus.CRITICAL ? AlertTriangle : status === SystemStatus.WARNING ? MapPin : ShieldCheck;
@@ -173,101 +374,184 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     }, []);
 
     // Simulation State
-    const [historyData, setHistoryData] = useState<any[]>([]);
+    const [historyData, setHistoryData] = useState<{ lat: number; lng: number; time: Date; event?: { type: string; title: string; desc?: string } }[]>([]);
+    const [trajectoryLoading, setTrajectoryLoading] = useState(false);
 
-    // 1. Simulator: Normal Path (Park -> Home)
+    // 上海市静安区美丽园小区（延安西路379弄）- 真实地址作为安全中心，电子围栏半径 100m
+    const HOME_LAT = 31.2192;
+    const HOME_LNG = 121.4385;
+    const HOME_POS: [number, number] = [HOME_LNG, HOME_LAT]; // [lng, lat] for 高德
+    const GEOFENCE_RADIUS_M = 100;                          // 电子围栏半径 100 米
+    const POINT_INTERVAL_SEC = 180;          // 每点间隔 3 分钟
+    const TOTAL_HOURS = 12;                  // 12 小时内的轨迹
+    const NUM_POINTS = Math.floor((TOTAL_HOURS * 3600) / POINT_INTERVAL_SEC); // 240 点
+    const PLAYBACK_MS_PER_POINT = 400;      // 回放时每点间隔 400ms，兼顾逆地理解析速度
+    const SAFE_ZONE_RADIUS_DEG = 0.0009;    // 约 100 米对应的纬度近似量（111km/度）
+
+    const distFromHome = (lat: number, lng: number) =>
+        Math.sqrt((lat - HOME_LAT) ** 2 + (lng - HOME_LNG) ** 2);
+
+    // 1. 正常轨迹：12 小时内，模拟在美丽园小区及 100m 电子围栏内活动（下楼、小区内散步、取快递等）
     const simulateNormalPath = () => {
-        const points = [];
-        const home = [31.2235, 121.4453];
-        const park = [31.2260, 121.4480];
-        const now = new Date();
-        const startTime = new Date(now.getTime() - 30 * 60 * 1000); // 30 mins ago
-
-        // Walk from Park to Home
-        for (let i = 0; i <= 30; i++) {
-            const t = i / 30; // 0 to 1
-            // Linear interpolation
-            const lat = park[0] + (home[0] - park[0]) * t;
-            const lng = park[1] + (home[1] - park[1]) * t;
-
-            // Add noise
-            const noiseLat = (Math.random() - 0.5) * 0.0002;
-            const noiseLng = (Math.random() - 0.5) * 0.0002;
-
-            points.push({
-                lat: lat + noiseLat,
-                lng: lng + noiseLng,
-                time: new Date(startTime.getTime() + i * 60000),
-                event: i === 0 ? { type: 'normal', title: '🌲 公园散步', desc: '离开公园，准备回家' } : null
-            });
-        }
-        setHistoryData(points);
-        setHistoryIndex(points.length - 1);
-        setIsPlaying(true);
-    };
-
-    // 2. Simulator: Lost Path (Home -> Unknown -> Wandering)
-    const simulateLostPath = () => {
-        const points = [];
-        const home = [31.2235, 121.4453];
-        const now = new Date();
-        const startTime = new Date(now.getTime() - 60 * 60 * 1000); // 1 hour ago
-
-        let currentLat = home[0];
-        let currentLng = home[1];
-
-        for (let i = 0; i <= 60; i++) {
-            // Random walk away from home
-            const angle = Math.random() * Math.PI * 2;
-            const speed = 0.0003; // ~30m per min
-
-            currentLat += Math.sin(angle) * speed + 0.0001; // Drift North
-            currentLng += Math.cos(angle) * speed + 0.0001; // Drift East
-
-            let event = null;
-            if (i === 40) {
-                event = { type: 'wandering', title: '⚠️ 疑似走失', desc: '超出安全围栏范围！' };
+        setTrajectoryLoading(true);
+        requestAnimationFrame(() => {
+            const points: { lat: number; lng: number; time: Date; event?: { type: string; title: string; desc?: string } }[] = [];
+            const startTime = new Date(Date.now() - TOTAL_HOURS * 3600 * 1000);
+            // 围栏内半径约 80m（略小于 100m），保证所有点都在电子围栏内
+            const maxR = 0.00072; // 约 80m
+            let lat = HOME_LAT;
+            let lng = HOME_LNG;
+            for (let i = 0; i < NUM_POINTS; i++) {
+                const t = i / NUM_POINTS;
+                // 模拟一天内多次在小区内短距离移动：早晨-中午-下午-傍晚-夜间
+                const phase = Math.sin(t * Math.PI * 2) * 0.5 + 0.5;
+                const angle = t * Math.PI * 4 + phase * Math.PI + (Math.random() - 0.5) * 0.3;
+                const r = maxR * (0.3 + 0.7 * (0.5 + 0.5 * Math.sin(i * 0.02))) + (Math.random() - 0.5) * 0.00008;
+                lat = HOME_LAT + Math.sin(angle) * r;
+                lng = HOME_LNG + Math.cos(angle) * r;
+                const event = i === 0 ? { type: 'normal', title: '🏠 在安全区域内', desc: '12 小时轨迹开始' } : undefined;
+                points.push({
+                    lat,
+                    lng,
+                    time: new Date(startTime.getTime() + i * POINT_INTERVAL_SEC * 1000),
+                    event,
+                });
             }
-
-            points.push({
-                lat: currentLat,
-                lng: currentLng,
-                time: new Date(startTime.getTime() + i * 60000),
-                event
-            });
-        }
-        setHistoryData(points);
-        setHistoryIndex(points.length - 1);
-        setIsPlaying(true);
+            setHistoryData(points);
+            setHistoryIndex(0);
+            setIsPlaying(true);
+            setTrajectoryLoading(false);
+        });
     };
 
-    // Initial Load
-    useEffect(() => {
-        simulateNormalPath();
-    }, []);
+    // 2. 疑似走失轨迹：前 6 小时在美丽园小区内/附近，之后沿延安西路→南京西路方向离开，超出 100m 围栏时打“疑似走失”
+    const simulateLostPath = () => {
+        setTrajectoryLoading(true);
+        requestAnimationFrame(() => {
+            const points: { lat: number; lng: number; time: Date; event?: { type: string; title: string; desc?: string } }[] = [];
+            const startTime = new Date(Date.now() - TOTAL_HOURS * 3600 * 1000);
+            const halfPoints = Math.floor(NUM_POINTS / 2);
+            let eventTriggered = false;
+            // 真实路径：美丽园(延安西路379弄) → 向东向北沿路可到静安寺/南京西路一带（约 1.5–2.5 km）
+            const stepLat = 0.00025 / 50;   // 每约 50 点向北约 0.00025 度（约 28m），后半段共约 0.0025 度 ≈ 280m 纬度方向
+            const stepLng = 0.00035 / 50;  // 向东略大，模拟沿延安西路向东再向北
+            let lat = HOME_LAT;
+            let lng = HOME_LNG;
+            for (let i = 0; i < NUM_POINTS; i++) {
+                if (i <= halfPoints) {
+                    // 前 6 小时：在小区及围栏内活动（与正常轨迹类似但范围略大，仍 <100m）
+                    const t = i / halfPoints;
+                    const angle = t * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+                    const r = 0.00075 * (0.4 + 0.6 * Math.random());
+                    lat = HOME_LAT + Math.sin(angle) * r + (Math.random() - 0.5) * 0.00006;
+                    lng = HOME_LNG + Math.cos(angle) * r + (Math.random() - 0.5) * 0.00006;
+                } else {
+                    // 后 6 小时：沿东北方向“走出”小区（模拟沿延安西路向东、向南京西路方向）
+                    const k = i - halfPoints;
+                    const jitter = (Math.random() - 0.5) * 0.00004;
+                    lat += stepLat + jitter;
+                    lng += stepLng + jitter * 1.2;
+                }
 
-    // Initialize history index to end
-    useEffect(() => {
-        setHistoryIndex(historyData.length - 1);
-    }, [historyData]);
+                let event: { type: string; title: string; desc?: string } | undefined;
+                if (i === 0) {
+                    event = { type: 'normal', title: '🏠 在安全区域内', desc: '轨迹开始' };
+                } else if (!eventTriggered && distFromHome(lat, lng) > SAFE_ZONE_RADIUS_DEG) {
+                    eventTriggered = true;
+                    event = { type: 'wandering', title: '⚠️ 疑似走失', desc: '已超出电子围栏（100m）' };
+                }
 
-    // Playback Timer
+                points.push({
+                    lat,
+                    lng,
+                    time: new Date(startTime.getTime() + i * POINT_INTERVAL_SEC * 1000),
+                    event,
+                });
+            }
+            setHistoryData(points);
+            setHistoryIndex(0);
+            setIsPlaying(true);
+            setTrajectoryLoading(false);
+        });
+    };
+
+    // 回放：从最早记录时间（index 0）推进到最后一个点；用 ref 存 interval 便于暂停按钮立即清除
     useEffect(() => {
-        let interval: any;
-        if (isPlaying) {
-            interval = setInterval(() => {
+        if (playbackIntervalRef.current) {
+            clearInterval(playbackIntervalRef.current);
+            playbackIntervalRef.current = null;
+        }
+        if (isPlaying && historyData.length > 0) {
+            playbackIntervalRef.current = setInterval(() => {
                 setHistoryIndex(prev => {
                     if (prev >= historyData.length - 1) {
                         setIsPlaying(false);
+                        if (playbackIntervalRef.current) {
+                            clearInterval(playbackIntervalRef.current);
+                            playbackIntervalRef.current = null;
+                        }
                         return prev;
                     }
                     return prev + 1;
                 });
-            }, 500); // Update every 500ms
+            }, PLAYBACK_MS_PER_POINT);
         }
-        return () => clearInterval(interval);
+        return () => {
+            if (playbackIntervalRef.current) {
+                clearInterval(playbackIntervalRef.current);
+                playbackIntervalRef.current = null;
+            }
+        };
     }, [isPlaying, historyData.length]);
 
+    const resetToCurrentLocation = () => {
+        if (playbackIntervalRef.current) {
+            clearInterval(playbackIntervalRef.current);
+            playbackIntervalRef.current = null;
+        }
+        setIsPlaying(false);
+        setHistoryData([]);
+        setHistoryIndex(0);
+    };
+
+    const [displayAddress, setDisplayAddress] = useState<string>('上海市静安区延安西路379弄 美丽园小区');
+    const [addressLoading, setAddressLoading] = useState(false);
+    const addressRequestIdRef = useRef(0);
+
+    useEffect(() => {
+        const lng = historyData.length > 0 && historyData[historyIndex]
+            ? historyData[historyIndex].lng
+            : HOME_POS[0];
+        const lat = historyData.length > 0 && historyData[historyIndex]
+            ? historyData[historyIndex].lat
+            : HOME_POS[1];
+        const reqId = ++addressRequestIdRef.current;
+        setAddressLoading(true);
+        mapService.reverseGeocode(lng, lat).then((res) => {
+            if (reqId !== addressRequestIdRef.current) return;
+            setAddressLoading(false);
+            if (res.success && res.formattedAddress) {
+                setDisplayAddress(res.formattedAddress);
+            } else {
+                setDisplayAddress(`经纬度: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+            }
+        }).catch(() => {
+            if (reqId !== addressRequestIdRef.current) return;
+            setAddressLoading(false);
+            setDisplayAddress(`经纬度: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+        });
+    }, [historyData, historyIndex]);
+
+    // 经纬度文案：有轨迹为当前点，无轨迹为预设模拟位置（与紫色“实时位置”点一致）
+    const latLngText = useMemo(() => {
+        if (historyData.length > 0 && historyData[historyIndex]) {
+            const p = historyData[historyIndex];
+            return `Lat: ${p.lat.toFixed(4)}, Lng: ${p.lng.toFixed(4)}`;
+        }
+        const simLat = HOME_LAT + 0.0002;
+        const simLng = HOME_LNG + 0.00025;
+        return `Lat: ${simLat.toFixed(4)}, Lng: ${simLng.toFixed(4)}`;
+    }, [historyData, historyIndex]);
 
     // Initialize Map when Location Tab is active
     useEffect(() => {
@@ -278,7 +562,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 // Wait for DOM to be ready
                 await new Promise(r => setTimeout(r, 100));
 
-                const homePos: [number, number] = [121.4453, 31.2235]; // Lng, Lat
+                const homePos: [number, number] = HOME_POS;
 
                 // 1. Create Map
                 const map = await mapService.createMap('guardian-map-container', homePos);
@@ -287,14 +571,20 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 mapRef.current = map;
 
                 // 2. Add Static Geofence
-                mapService.addCircle(map, homePos, 300, {
+                mapService.addCircle(map, homePos, GEOFENCE_RADIUS_M, {
                     color: '#10b981',
                     fillColor: '#34d399',
                     dashArray: '5, 5'
                 });
 
-                // 3. Add Home Marker
-                mapService.addMarker(map, homePos, undefined, "家庭住址 (安全中心)");
+                // 3. Add Home Marker - 美丽园小区（安全中心）
+                mapService.addMarker(map, homePos, undefined, "美丽园小区 (安全中心)");
+
+                // 4. 预设“实时位置”点（与点击返回当前位置时的位置、颜色一致，从主页直接进入地图时即显示）
+                const currentPos: [number, number] = [HOME_LNG + 0.00025, HOME_LAT + 0.0002];
+                currentLocationMarkerRef.current = mapService.addMarker(map, currentPos,
+                    `<div style="background:#6366f1;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(99, 102, 241, 0.25);"></div>`
+                );
 
                 // Initialize active layers array
                 layersRef.current = [];
@@ -311,6 +601,12 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 if (mapRef.current.destroy) mapRef.current.destroy();
                 mapRef.current = null;
                 layersRef.current = null;
+                pastPolylineRef.current = null;
+                futurePolylineRef.current = null;
+                userMarkerRef.current = null;
+                currentLocationMarkerRef.current = null;
+                eventMarkersRef.current = [];
+                lastHistoryDataForEventsRef.current = null;
             }
         }
     }, [activeTab, isSettingsOpen]);
@@ -322,18 +618,18 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         const initOverviewMap = async () => {
             if (activeTab === 'overview' && !isSettingsOpen && !overviewMapRef.current) {
                 await new Promise(r => setTimeout(r, 100));
-                const homePos: [number, number] = [121.4453, 31.2235];
+                const homePos: [number, number] = HOME_POS;
                 const map = await mapService.createMap('overview-map-container', homePos);
                 if (!map || isCancelled) return;
                 overviewMapRef.current = map;
 
                 // Add Home Marker & Circle
-                mapService.addCircle(map, homePos, 300, {
+                mapService.addCircle(map, homePos, GEOFENCE_RADIUS_M, {
                     color: '#6366f1',
                     fillColor: '#818cf8',
                     dashArray: '5, 5'
                 });
-                mapService.addMarker(map, homePos, undefined, "家庭位置");
+                mapService.addMarker(map, homePos, undefined, "美丽园小区");
             }
         };
 
@@ -350,59 +646,115 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         };
     }, [activeTab, isSettingsOpen]);
 
-    // Update Map Layers based on historyIndex and Simulation
+    // 稳定轨迹渲染：创建一次折线/标记，仅用 setPath/setPosition 更新，避免闪烁
     useEffect(() => {
-        if (activeTab === 'location' && !isSettingsOpen && mapRef.current) {
-            // Clear dynamic layers
-            if (layersRef.current && Array.isArray(layersRef.current)) {
-                mapRef.current.remove(layersRef.current);
-                layersRef.current = [];
-            } else {
-                layersRef.current = [];
-            }
+        if (activeTab !== 'location' || isSettingsOpen || !mapRef.current) return;
+        const map = mapRef.current;
 
-            const newOverlays: any[] = [];
+        const thin = (path: [number, number][], step: number) => {
+            if (path.length <= step) return path;
+            const out: [number, number][] = [];
+            for (let i = 0; i < path.length; i += step) out.push(path[i]);
+            if ((path.length - 1) % step !== 0) out.push(path[path.length - 1]);
+            return out;
+        };
+        const thinStep = 10;
 
-            // 1. Draw Historical Path (Amap uses [lng, lat])
-            const pastPoints = historyData.slice(0, historyIndex + 1).map(p => [p.lng, p.lat] as [number, number]);
-            const futurePoints = historyData.slice(historyIndex).map(p => [p.lng, p.lat] as [number, number]);
-
-            if (pastPoints.length > 0) {
-                const poly = mapService.addPolyline(mapRef.current, pastPoints, { color: '#6366f1', weight: 6, opacity: 0.9 });
-                if (poly) newOverlays.push(poly);
-            }
-            if (futurePoints.length > 0) {
-                const poly = mapService.addPolyline(mapRef.current, futurePoints, { color: '#cbd5e1', weight: 4, opacity: 0.5, dashArray: '10, 10' });
-                if (poly) newOverlays.push(poly);
-            }
-
-            // 2. Draw Historical Events (Markers)
-            historyData.forEach((pt, idx) => {
-                if (pt.event && idx <= historyIndex) {
-                    const isFall = pt.event.type === 'fall';
-                    const color = isFall ? '#e11d48' : '#f59e0b';
-
-                    const marker = mapService.addMarker(mapRef.current, [pt.lng, pt.lat],
-                        `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:2px solid white;box-shadow:0 3px 6px rgba(0,0,0,0.3);color:white;text-align:center;line-height:20px;font-weight:bold;font-size:14px;">${isFall ? '!' : '?'}</div>`,
-                        pt.event.title
-                    );
-                    if (marker) newOverlays.push(marker);
+        const run = () => {
+            try {
+                if (historyData.length === 0) {
+                    if (pastPolylineRef.current) {
+                        map.remove(pastPolylineRef.current);
+                        pastPolylineRef.current = null;
+                    }
+                    if (futurePolylineRef.current) {
+                        map.remove(futurePolylineRef.current);
+                        futurePolylineRef.current = null;
+                    }
+                    if (userMarkerRef.current) {
+                        map.remove(userMarkerRef.current);
+                        userMarkerRef.current = null;
+                    }
+                    eventMarkersRef.current.forEach(({ marker }) => map.remove(marker));
+                    eventMarkersRef.current = [];
+                    lastHistoryDataForEventsRef.current = null;
+                    // 返回当前位置：在美丽园小区内显示模拟的“实时位置”点，颜色与图例“实时位置”(indigo-500)一致
+                    const currentPos: [number, number] = [
+                        HOME_LNG + 0.00025,
+                        HOME_LAT + 0.0002,
+                    ];
+                    if (!currentLocationMarkerRef.current) {
+                        currentLocationMarkerRef.current = mapService.addMarker(map, currentPos,
+                            `<div style="background:#6366f1;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(99, 102, 241, 0.25);"></div>`
+                        );
+                    }
+                    return;
                 }
-            });
-
-            // 3. Draw Current User Position
-            const currentPt = historyData[historyIndex];
-            if (currentPt) {
-                const userMarker = mapService.addMarker(mapRef.current, [currentPt.lng, currentPt.lat],
-                    `<div style="background:#4f46e5;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(79, 70, 229, 0.2);"></div>`
-                );
-                if (userMarker) {
-                    newOverlays.push(userMarker);
+                if (currentLocationMarkerRef.current) {
+                    map.remove(currentLocationMarkerRef.current);
+                    currentLocationMarkerRef.current = null;
                 }
-            }
 
-            layersRef.current = newOverlays;
-        }
+                const pastPoints = historyData.slice(0, historyIndex + 1).map(p => [p.lng, p.lat] as [number, number]);
+                const futurePoints = historyData.slice(historyIndex).map(p => [p.lng, p.lat] as [number, number]);
+                const pastThin = pastPoints.length > 500 ? thin(pastPoints, thinStep) : pastPoints;
+                const futureThin = futurePoints.length > 500 ? thin(futurePoints, thinStep) : futurePoints;
+                const pastPath = pastThin.length >= 2 ? pastThin : pastThin.length === 1 ? [pastThin[0], pastThin[0]] : [];
+                const futurePath = futureThin.length >= 2 ? futureThin : futureThin.length === 1 ? [futureThin[0], futureThin[0]] : [];
+                const currentPt = historyData[historyIndex];
+
+                if (!pastPolylineRef.current && pastPath.length >= 2) {
+                    pastPolylineRef.current = mapService.addPolyline(map, pastPath, { color: '#94a3b8', weight: 6, opacity: 0.9 });
+                }
+                if (pastPolylineRef.current && pastPath.length >= 2) {
+                    pastPolylineRef.current.setPath(pastPath);
+                }
+
+                if (!futurePolylineRef.current && futurePath.length >= 2) {
+                    futurePolylineRef.current = mapService.addPolyline(map, futurePath, { color: '#94a3b8', weight: 4, opacity: 0.5, dashArray: '10, 10' });
+                }
+                if (futurePolylineRef.current) {
+                    const fp = futurePath.length >= 2 ? futurePath : (currentPt ? [[currentPt.lng, currentPt.lat], [currentPt.lng, currentPt.lat]] : []);
+                    futurePolylineRef.current.setPath(fp);
+                }
+
+                // 事件点：仅在 historyData 变更时重建，否则只更新显隐，避免闪烁
+                if (lastHistoryDataForEventsRef.current !== historyData) {
+                    eventMarkersRef.current.forEach(({ marker }) => map.remove(marker));
+                    eventMarkersRef.current = [];
+                    historyData.forEach((pt, idx) => {
+                        if (!pt.event) return;
+                        const isFall = pt.event.type === 'fall';
+                        const color = isFall ? '#e11d48' : '#f59e0b';
+                        const marker = mapService.addMarker(map, [pt.lng, pt.lat],
+                            `<div style="background:${color};width:24px;height:24px;border-radius:50%;border:2px solid white;box-shadow:0 3px 6px rgba(0,0,0,0.3);color:white;text-align:center;line-height:20px;font-weight:bold;font-size:14px;">${isFall ? '!' : '?'}</div>`,
+                            pt.event.title
+                        );
+                        if (marker) eventMarkersRef.current.push({ marker, eventIndex: idx });
+                    });
+                    lastHistoryDataForEventsRef.current = historyData;
+                }
+                eventMarkersRef.current.forEach(({ marker, eventIndex }) => {
+                    const visible = eventIndex <= historyIndex;
+                    if (visible && typeof marker.show === 'function') marker.show();
+                    if (!visible && typeof marker.hide === 'function') marker.hide();
+                });
+
+                if (currentPt) {
+                    if (!userMarkerRef.current) {
+                        userMarkerRef.current = mapService.addMarker(map, [currentPt.lng, currentPt.lat],
+                            `<div style="background:#4f46e5;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(79, 70, 229, 0.2);"></div>`
+                        );
+                    } else {
+                        userMarkerRef.current.setPosition([currentPt.lng, currentPt.lat]);
+                    }
+                }
+            } catch (e) {
+                console.warn('[Dashboard] Map layer update error:', e);
+            }
+        };
+
+        run();
     }, [activeTab, isSettingsOpen, historyIndex, historyData]);
 
 
@@ -1174,141 +1526,6 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         </div>
     );
 
-    const LocationTab = () => (
-        <div className="flex flex-col h-full bg-slate-50">
-            {/* Map Half */}
-            <div className="h-[55%] w-full relative group">
-                <div id="guardian-map-container" ref={mapContainerRef} className="w-full h-full z-0 bg-slate-200"></div>
-
-
-                {/* Controls */}
-                <div className="absolute top-4 left-4 z-[400] bg-white/90 backdrop-blur-sm p-2 rounded-lg shadow-sm border border-slate-200">
-                    <div className="text-[10px] space-y-1 text-slate-600 font-medium">
-                        <div className="flex items-center gap-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div> 电子围栏
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500"></div> 实时位置
-                        </div>
-                        <div className="flex items-center gap-1.5 text-slate-400">
-                            <div className="w-1.5 h-1.5 rounded-full bg-slate-400"></div> 历史轨迹
-                        </div>
-                    </div>
-                </div>
-
-                {/* Simulation Controls */}
-                <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2">
-                    <button
-                        onClick={simulateNormalPath}
-                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
-                    >
-                        🏠 模拟: 正常回家
-                    </button>
-                    <button
-                        onClick={simulateLostPath}
-                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
-                    >
-                        ⚠️ 模拟: 迷路/走失
-                    </button>
-                </div>
-
-                {/* Timeline Slider Overlay */}
-                <div className="absolute bottom-4 left-4 right-4 z-[400] bg-white/95 backdrop-blur-md p-3 rounded-xl shadow-lg border border-slate-200/60">
-                    <div className="flex items-center gap-3 mb-1">
-                        <button
-                            onClick={() => setIsPlaying(!isPlaying)}
-                            className="w-8 h-8 flex items-center justify-center rounded-full bg-indigo-600 text-white hover:bg-indigo-700 shadow-md transition-colors"
-                        >
-                            {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
-                        </button>
-
-                        <div className="flex-1">
-                            <div className="flex justify-between text-[10px] font-bold text-slate-500 mb-1">
-                                <span className="text-indigo-600">
-                                    {historyData[historyIndex]?.time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                </span>
-                                {historyIndex === historyData.length - 1 && <span className="px-1 py-0.5 bg-red-100 text-red-600 rounded text-[9px]">LIVE</span>}
-                            </div>
-                            <input
-                                type="range"
-                                min="0"
-                                max={historyData.length - 1}
-                                value={historyIndex}
-                                onChange={(e) => {
-                                    setHistoryIndex(Number(e.target.value));
-                                    setIsPlaying(false);
-                                }}
-                                className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                            />
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Info Half (Scrollable) */}
-            <div className="flex-1 overflow-y-auto p-4 pb-20 space-y-4">
-                {/* Location Card */}
-                <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                        <MapPin size={14} /> 地理编码解析
-                    </h3>
-                    <div className="mb-3">
-                        <p className="text-lg font-bold text-slate-800 leading-tight">
-                            {simulation === SimulationType.WANDERING ? '上海市 静安区 华山路' : '上海市 静安区 幸福小区'}
-                        </p>
-                        <p className="text-xs text-slate-500 font-mono mt-1">
-                            Lat: {historyData[historyIndex]?.lat.toFixed(4)}, Long: {historyData[historyIndex]?.lng.toFixed(4)}
-                        </p>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div className="bg-slate-50 p-2 rounded-xl text-center">
-                            <p className="text-[10px] text-slate-400">海拔</p>
-                            <p className="font-bold text-slate-700">12m</p>
-                        </div>
-                        <div className="bg-slate-50 p-2 rounded-xl text-center">
-                            <p className="text-[10px] text-slate-400">移动速度</p>
-                            <p className="font-bold text-slate-700">{isPlaying ? '4.2 km/h' : '0 km/h'}</p>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Multimodal Card */}
-                <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-                    <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3 flex items-center gap-1.5">
-                        <Brain size={14} /> 多模态环境感知
-                    </h3>
-
-                    <div className="w-full h-32 bg-slate-100 rounded-xl overflow-hidden mb-3 relative group">
-                        <img
-                            src={simulation === SimulationType.WANDERING
-                                ? "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?q=80&w=600&auto=format&fit=crop"
-                                : "https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=600&auto=format&fit=crop"
-                            }
-                            alt="View"
-                            className="w-full h-full object-cover"
-                        />
-                        <div className="absolute top-2 right-2 bg-black/60 backdrop-blur text-white text-[10px] px-2 py-1 rounded-md flex items-center gap-1">
-                            <Eye size={10} /> 视觉模态
-                        </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                        <div className="w-1 bg-indigo-500 rounded-full shrink-0"></div>
-                        <div>
-                            <p className="text-xs text-slate-400 font-bold mb-1">环境语义分析 (Gemini)</p>
-                            <p className="text-sm text-slate-700 leading-relaxed">
-                                {simulation === SimulationType.WANDERING
-                                    ? "检测到用户处于繁忙十字路口附近。视觉分析显示车流量较大。建议立即介入。"
-                                    : "用户处于熟悉的家庭环境中。光照充足，地面无障碍物。环境安全评级：优。"
-                                }
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    );
-
     const MedicationTab = () => (
         <div className="flex flex-col gap-5 p-5 pb-24 animate-fade-in-up">
             <div className="flex justify-between items-center mb-2">
@@ -1401,7 +1618,26 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
                             {activeTab === 'overview' && <OverviewTab />}
                             {activeTab === 'health' && <HealthTab />}
-                            {activeTab === 'location' && <LocationTab />}
+                            {activeTab === 'location' && (
+                                <LocationTabContent
+                                    mapContainerRef={mapContainerRef}
+                                    historyData={historyData}
+                                    historyIndex={historyIndex}
+                                    setHistoryIndex={setHistoryIndex}
+                                    isPlaying={isPlaying}
+                                    setIsPlaying={setIsPlaying}
+                                    trajectoryLoading={trajectoryLoading}
+                                    simulateNormalPath={simulateNormalPath}
+                                    simulateLostPath={simulateLostPath}
+                                    resetToCurrentLocation={resetToCurrentLocation}
+                                    playbackIntervalRef={playbackIntervalRef}
+                                    POINT_INTERVAL_SEC={POINT_INTERVAL_SEC}
+                                    simulation={simulation}
+                                    displayAddress={displayAddress}
+                                    addressLoading={addressLoading}
+                                    latLngText={latLngText}
+                                />
+                            )}
                             {activeTab === 'medication' && <MedicationTab />}
 
                         </>
