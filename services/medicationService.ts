@@ -85,13 +85,45 @@ class MedicationService {
             if (saved) {
                 this.medications = JSON.parse(saved);
             } else {
-                // 默认药物（演示用）
                 this.medications = this.getDefaultMedications();
             }
         } catch (e) {
             console.warn('[Medication] 加载药物失败:', e);
             this.medications = this.getDefaultMedications();
         }
+    }
+
+    /**
+     * 保存药物列表到本地
+     */
+    private saveMedications(): void {
+        try {
+            localStorage.setItem('emobit_medications', JSON.stringify(this.medications));
+        } catch (e) {
+            console.warn('[Medication] 保存药物失败:', e);
+        }
+    }
+
+    /**
+     * 添加药物（子女端）
+     * @param med 除 id 外的药物信息，id 由服务生成
+     */
+    addMedication(med: Omit<Medication, 'id'>): Medication {
+        const newMed: Medication = {
+            ...med,
+            id: `med_${Date.now()}`,
+        };
+        this.medications.push(newMed);
+        this.saveMedications();
+        return newMed;
+    }
+
+    /**
+     * 删除药物
+     */
+    removeMedication(id: string): void {
+        this.medications = this.medications.filter((m) => m.id !== id);
+        this.saveMedications();
     }
 
     /**

@@ -7,8 +7,10 @@ import { voiceSelectionService } from '../services/voiceSelectionService';
 import { blobToWav, getAudioDurationSeconds } from '../utils/audioUtils';
 import { healthStateService, HealthMetrics } from '../services/healthStateService';
 import { mapService } from '../services/mapService';
-import { ShieldCheck, MapPin, Heart, Pill, AlertTriangle, Phone, Activity, Clock, User, Calendar, LayoutGrid, FileText, Settings, ChevronRight, Eye, Brain, Layers, Play, Pause, SkipBack, SkipForward, History, AlertCircle, Signal, Wifi, Battery, Moon, Footprints, Sun, Cloud, ArrowLeft, Mic, Upload, Sparkles, CheckCircle, Volume2, ToggleRight, Loader2, ScanFace, Box, Wand2 } from 'lucide-react';
+import { medicationService, Medication } from '../services/medicationService';
+import { ShieldCheck, MapPin, Heart, Pill, AlertTriangle, Phone, Activity, Clock, User, Calendar, LayoutGrid, FileText, Settings, ChevronRight, Eye, Brain, Layers, Play, Pause, SkipBack, SkipForward, History, AlertCircle, Signal, Wifi, Battery, Moon, Footprints, Sun, Cloud, ArrowLeft, Mic, Upload, Sparkles, CheckCircle, Volume2, ToggleRight, Loader2, ScanFace, Box, Wand2, Plus, X } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, AreaChart, Area, BarChart, Bar, CartesianGrid } from 'recharts';
+import ReactMarkdown from 'react-markdown';
 
 interface DashboardProps {
     status: SystemStatus;
@@ -35,6 +37,21 @@ interface LocationTabContentProps {
     addressLoading?: boolean;
     /** 经纬度文案：有轨迹时为当前点，无轨迹时为预设模拟位置（与紫色点一致） */
     latLngText: string;
+    /** 当前位置相关照片：多模态环境感知（不显示地图），与当前地址/POI 关联 */
+    locationPhotoItems: { url: string; caption?: string }[];
+    /** 是否使用 JS API 交互地图（可缩放、平移）；null=尚未尝试，true=使用 JS 地图，false=使用静态图 */
+    useJsMap: boolean | null;
+    /** 上方静态地图图片 URL（高德 Web 服务，仅 useJsMap=false 时显示） */
+    topMapStaticUrl: string;
+    /** 静态图中心（与 topMapStaticUrl 一致），用于叠加层坐标转换 */
+    staticMapCenter: { lng: number; lat: number };
+    /** 安全中心（电子围栏圆心）[lng, lat] */
+    homePos: [number, number];
+    /** 电子围栏半径（度，约 100m） */
+    geofenceRadiusDeg: number;
+    /** 环境语义分析（Groq）：老人周边安全与地理位置描述 */
+    environmentAnalysis: string;
+    environmentAnalysisLoading?: boolean;
 }
 
 const LocationTabContent: React.FC<LocationTabContentProps> = ({
@@ -54,10 +71,60 @@ const LocationTabContent: React.FC<LocationTabContentProps> = ({
     displayAddress,
     addressLoading = false,
     latLngText,
-}) => (
+    locationPhotoItems,
+    useJsMap,
+    topMapStaticUrl,
+    staticMapCenter,
+    homePos,
+    geofenceRadiusDeg,
+    environmentAnalysis,
+    environmentAnalysisLoading = false,
+}) => {
+    const STATIC_MAP_ZOOM = 16;
+    const STATIC_MAP_W = 800;
+    const STATIC_MAP_H = 400;
+    const toPx = (lng: number, lat: number) =>
+        mapService.latLngToStaticMapPx(lng, lat, staticMapCenter.lng, staticMapCenter.lat, STATIC_MAP_ZOOM, STATIC_MAP_W, STATIC_MAP_H);
+    const currentPos = historyData.length > 0 && historyData[historyIndex]
+        ? { lng: historyData[historyIndex].lng, lat: historyData[historyIndex].lat }
+        : { lng: homePos[0] + 0.00025, lat: homePos[1] + 0.0002 };
+    const homePx = toPx(homePos[0], homePos[1]);
+    const radiusPx = Math.abs(toPx(homePos[0], homePos[1] + geofenceRadiusDeg).y - homePx.y);
+    const pastPath = historyData.length > 0 && historyIndex >= 0
+        ? historyData.slice(0, historyIndex + 1).map((p) => toPx(p.lng, p.lat))
+        : [];
+    const futurePath = historyData.length > 0 && historyIndex < historyData.length - 1
+        ? historyData.slice(historyIndex).map((p) => toPx(p.lng, p.lat))
+        : [];
+    const currentPx = toPx(currentPos.lng, currentPos.lat);
+
+    return (
     <div className="flex flex-col h-full bg-slate-50">
         <div className="h-[55%] w-full relative group">
-            <div id="guardian-map-container" ref={mapContainerRef} className="w-full h-full z-0 bg-slate-200"></div>
+            <div id="guardian-map-container" ref={mapContainerRef} className="w-full h-full min-h-[280px] z-0 bg-slate-200 overflow-hidden relative">
+                {useJsMap === false && topMapStaticUrl ? (
+                    <>
+                        <img src={topMapStaticUrl} alt="当前位置地图" className="w-full h-full min-h-[280px] object-cover object-center" referrerPolicy="no-referrer" />
+                        <div className="absolute inset-0 w-full h-full pointer-events-none" style={{ aspectRatio: `${STATIC_MAP_W}/${STATIC_MAP_H}` }}>
+                            <svg className="w-full h-full" viewBox={`0 0 ${STATIC_MAP_W} ${STATIC_MAP_H}`} preserveAspectRatio="xMidYMid slice">
+                                {/* 电子围栏（绿色虚线圆） */}
+                                <circle cx={homePx.x} cy={homePx.y} r={radiusPx} fill="#34d399" fillOpacity="0.15" stroke="#10b981" strokeWidth="2" strokeDasharray="5 5" />
+                                {/* 历史轨迹（已走过） */}
+                                {pastPath.length >= 2 && (
+                                    <polyline points={pastPath.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#94a3b8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+                                )}
+                                {/* 历史轨迹（未走） */}
+                                {futurePath.length >= 2 && (
+                                    <polyline points={futurePath.map((p) => `${p.x},${p.y}`).join(' ')} fill="none" stroke="#cbd5e1" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 4" />
+                                )}
+                                {/* 当前位置点 */}
+                                <circle cx={currentPx.x} cy={currentPx.y} r="10" fill="#6366f1" stroke="white" strokeWidth="3" />
+                                <circle cx={currentPx.x} cy={currentPx.y} r="16" fill="none" stroke="#6366f1" strokeWidth="2" opacity="0.5" />
+                            </svg>
+                        </div>
+                    </>
+                ) : null}
+            </div>
             <div className="absolute top-4 left-4 z-[400] bg-white/90 backdrop-blur-sm p-2 rounded-lg shadow-sm border border-slate-200">
                 <div className="text-[10px] space-y-1 text-slate-600 font-medium">
                     <div className="flex items-center gap-1.5">
@@ -175,38 +242,59 @@ const LocationTabContent: React.FC<LocationTabContentProps> = ({
                     </div>
                 </div>
             </div>
-            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm overflow-hidden relative">
                 <h3 className="text-xs font-bold text-indigo-600 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                     <Brain size={14} /> 多模态环境感知
                 </h3>
-                <div className="w-full h-32 bg-slate-100 rounded-xl overflow-hidden mb-3 relative group">
-                    <img
-                        src={simulation === SimulationType.WANDERING
-                            ? "https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?q=80&w=600&auto=format&fit=crop"
-                            : "https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=600&auto=format&fit=crop"
-                        }
-                        alt="View"
-                        className="w-full h-full object-cover"
-                    />
-                    <div className="absolute top-2 right-2 bg-black/60 backdrop-blur text-white text-[10px] px-2 py-1 rounded-md flex items-center gap-1">
-                        <Eye size={10} /> 视觉模态
-                    </div>
+                <p className="text-[10px] text-slate-500 mb-2 flex items-center gap-1">
+                    <Eye size={10} /> 当前位置周边照片（与上方地址一致）
+                </p>
+                <div className="w-full flex gap-2 overflow-x-auto pb-1 no-scrollbar mb-3">
+                    {locationPhotoItems.length > 0 ? locationPhotoItems.map((item, i) => (
+                        <div key={i} className="flex-shrink-0 w-28 h-24 rounded-xl overflow-hidden bg-slate-100 relative group">
+                            <img
+                                src={item.url}
+                                alt={item.caption || `位置照片 ${i + 1}`}
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                    e.currentTarget.src = "https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=400&auto=format&fit=crop";
+                                }}
+                            />
+                            {item.caption ? (
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[9px] px-1 py-0.5 truncate">{item.caption}</div>
+                            ) : null}
+                        </div>
+                    )) : (
+                        <div className="flex gap-2 flex-shrink-0">
+                            <div className="w-28 h-24 rounded-xl overflow-hidden bg-slate-100">
+                                <img src="https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=400&auto=format&fit=crop" alt="位置照片" className="w-full h-full object-cover" />
+                            </div>
+                            <div className="w-28 h-24 rounded-xl overflow-hidden bg-slate-100">
+                                <img src="https://images.unsplash.com/photo-1513635269975-59663e0ac1ad?q=80&w=400&auto=format&fit=crop" alt="位置照片" className="w-full h-full object-cover" />
+                            </div>
+                        </div>
+                    )}
                 </div>
                 <div className="flex gap-3">
                     <div className="w-1 bg-indigo-500 rounded-full shrink-0"></div>
-                    <div>
-                        <p className="text-xs text-slate-400 font-bold mb-1">环境语义分析 (Gemini)</p>
-                        <p className="text-sm text-slate-700 leading-relaxed">
-                            {simulation === SimulationType.WANDERING
-                                ? "检测到用户处于繁忙十字路口附近。视觉分析显示车流量较大。建议立即介入。"
-                                : "用户处于熟悉的家庭环境中。光照充足，地面无障碍物。环境安全评级：优。"}
-                        </p>
+                    <div className="flex-1 min-w-0">
+                        <p className="text-xs text-slate-400 font-bold mb-1">环境语义分析 (Groq)</p>
+                        {environmentAnalysisLoading ? (
+                            <p className="text-sm text-slate-500">分析中…</p>
+                        ) : environmentAnalysis ? (
+                            <div className="text-sm text-slate-700 leading-relaxed report-markdown [&_h2]:font-bold [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2:first-child]:mt-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2 [&_li]:my-0.5 [&_p]:my-1 [&_strong]:font-semibold [&_strong]:text-slate-800">
+                                <ReactMarkdown>{environmentAnalysis}</ReactMarkdown>
+                            </div>
+                        ) : (
+                            <p className="text-sm text-slate-500">暂无分析</p>
+                        )}
                     </div>
                 </div>
             </div>
         </div>
     </div>
-);
+    );
+};
 
 // Mock Data - 使用 healthStateService 的基准心率
 const mockSleepData = [
@@ -252,8 +340,8 @@ const RealTimeHealthCharts = () => {
             {/* Heart Rate Card */}
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-72">
                 <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Heart className="text-rose-500" size={18} /> 实时心率监测 (Live)</h3>
-                <div className="flex-1 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="flex-1 w-full min-h-[200px]">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={200}>
                         <LineChart data={data}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                             {/* Increased interval to prevent overlap */}
@@ -269,8 +357,8 @@ const RealTimeHealthCharts = () => {
             {/* BP Card */}
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col h-64">
                 <h3 className="text-base font-bold text-slate-700 mb-4 flex items-center gap-2"><Activity className="text-indigo-500" size={18} /> 实时血压监测 (Live)</h3>
-                <div className="flex-1 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
+                <div className="flex-1 w-full min-h-[180px]">
+                    <ResponsiveContainer width="100%" height="100%" minHeight={180}>
                         <LineChart data={data}>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
                             <XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10 }} interval={10} />
@@ -353,6 +441,15 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     const [historyIndex, setHistoryIndex] = useState<number>(0);
     const [isPlaying, setIsPlaying] = useState(false);
     const playbackIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+    /** 当前位置周边 POI，用于多模态“当前位置相关照片” */
+    const [locationPhotoItems, setLocationPhotoItems] = useState<{ url: string; caption?: string }[]>([]);
+    /** 定位页是否使用 JS API 交互地图；null=首次进入待尝试，true=已用 JS 地图，false=已回退到静态图 */
+    const [useJsMap, setUseJsMap] = useState<boolean | null>(null);
+    /** 环境语义分析（Groq）：老人周边安全与地理位置描述 */
+    const [environmentAnalysis, setEnvironmentAnalysis] = useState<string>('');
+    const [environmentAnalysisLoading, setEnvironmentAnalysisLoading] = useState(false);
+    const environmentAnalysisReqIdRef = useRef(0);
 
     const statusColor = status === SystemStatus.CRITICAL ? 'rose' : status === SystemStatus.WARNING ? 'amber' : 'emerald';
     const StatusIcon = status === SystemStatus.CRITICAL ? AlertTriangle : status === SystemStatus.WARNING ? MapPin : ShieldCheck;
@@ -521,10 +618,10 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     useEffect(() => {
         const lng = historyData.length > 0 && historyData[historyIndex]
             ? historyData[historyIndex].lng
-            : HOME_POS[0];
+            : HOME_LNG + 0.00025;
         const lat = historyData.length > 0 && historyData[historyIndex]
             ? historyData[historyIndex].lat
-            : HOME_POS[1];
+            : HOME_LAT + 0.0002;
         const reqId = ++addressRequestIdRef.current;
         setAddressLoading(true);
         mapService.reverseGeocode(lng, lat).then((res) => {
@@ -553,42 +650,99 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         return `Lat: ${simLat.toFixed(4)}, Lng: ${simLng.toFixed(4)}`;
     }, [historyData, historyIndex]);
 
+    // 上方静态图 URL（高德 Web 服务）：与当前经纬度一致，仅在使用静态图回退时展示
+    const currentLngLat = useMemo(() => {
+        if (historyData.length > 0 && historyData[historyIndex]) {
+            return { lng: historyData[historyIndex].lng, lat: historyData[historyIndex].lat };
+        }
+        return { lng: HOME_LNG + 0.00025, lat: HOME_LAT + 0.0002 };
+    }, [historyData, historyIndex]);
+    const topMapStaticUrl = useMemo(() => {
+        return mapService.getStaticMapUrl(currentLngLat.lng, currentLngLat.lat, 800, 400);
+    }, [currentLngLat.lng, currentLngLat.lat]);
+
+    // 根据当前经纬度拉取周边 POI，生成“当前位置相关照片”列表（多模态环境感知）
+    useEffect(() => {
+        let cancelled = false;
+        const { lng, lat } = currentLngLat;
+        mapService.getNearbyPoisWeb(lng, lat, 500, 3).then((pois) => {
+            if (cancelled) return;
+            if (!pois.length) {
+                setLocationPhotoItems([
+                    { url: 'https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=400&auto=format&fit=crop', caption: '当前位置' },
+                    { url: 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?q=80&w=400&auto=format&fit=crop', caption: '周边' },
+                ]);
+                return;
+            }
+            const placeholder = 'https://images.unsplash.com/photo-1484154218962-a1c002085d2f?q=80&w=400&auto=format&fit=crop';
+            setLocationPhotoItems(pois.slice(0, 3).map((p) => ({
+                url: p.photoUrl || placeholder,
+                caption: p.name || undefined,
+            })));
+        });
+        return () => { cancelled = true; };
+    }, [currentLngLat.lng, currentLngLat.lat]);
+
+    // 环境语义分析（Groq）：根据当前地址与最近 3 个周边 POI 分析老人周边安全与地理位置
+    useEffect(() => {
+        const reqId = ++environmentAnalysisReqIdRef.current;
+        setEnvironmentAnalysisLoading(true);
+        const poiNames = locationPhotoItems.map((i) => i.caption).filter((c): c is string => !!c);
+        aiService
+            .analyzeEnvironmentForGuardian(displayAddress, poiNames)
+            .then((text) => {
+                if (reqId !== environmentAnalysisReqIdRef.current) return;
+                setEnvironmentAnalysis(text || '');
+            })
+            .catch(() => {
+                if (reqId !== environmentAnalysisReqIdRef.current) return;
+                setEnvironmentAnalysis('');
+            })
+            .finally(() => {
+                if (reqId === environmentAnalysisReqIdRef.current) setEnvironmentAnalysisLoading(false);
+            });
+    }, [displayAddress, locationPhotoItems]);
+
     // Initialize Map when Location Tab is active
     useEffect(() => {
         let isCancelled = false;
 
         const initMap = async () => {
-            if (activeTab === 'location' && !isSettingsOpen && !mapRef.current) {
-                // Wait for DOM to be ready
-                await new Promise(r => setTimeout(r, 100));
+            if (activeTab !== 'location' || isSettingsOpen || mapRef.current) return;
+            await new Promise(r => setTimeout(r, 100));
+            const homePos: [number, number] = HOME_POS;
 
-                const homePos: [number, number] = HOME_POS;
-
-                // 1. Create Map
-                const map = await mapService.createMap('guardian-map-container', homePos);
-                if (!map || isCancelled) return;
-
-                mapRef.current = map;
-
-                // 2. Add Static Geofence
-                mapService.addCircle(map, homePos, GEOFENCE_RADIUS_M, {
-                    color: '#10b981',
-                    fillColor: '#34d399',
-                    dashArray: '5, 5'
-                });
-
-                // 3. Add Home Marker - 美丽园小区（安全中心）
-                mapService.addMarker(map, homePos, undefined, "美丽园小区 (安全中心)");
-
-                // 4. 预设“实时位置”点（与点击返回当前位置时的位置、颜色一致，从主页直接进入地图时即显示）
-                const currentPos: [number, number] = [HOME_LNG + 0.00025, HOME_LAT + 0.0002];
-                currentLocationMarkerRef.current = mapService.addMarker(map, currentPos,
-                    `<div style="background:#6366f1;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(99, 102, 241, 0.25);"></div>`
-                );
-
-                // Initialize active layers array
-                layersRef.current = [];
+            const map = await mapService.createMap('guardian-map-container', homePos);
+            if (isCancelled) return;
+            if (!map) {
+                setUseJsMap(false);
+                return;
             }
+            setUseJsMap(true);
+            mapRef.current = map;
+
+            // 2. Add Static Geofence
+            mapService.addCircle(map, homePos, GEOFENCE_RADIUS_M, {
+                color: '#10b981',
+                fillColor: '#34d399',
+                dashArray: '5, 5'
+            });
+
+            // 3. Add Home Marker - 美丽园小区（安全中心）
+            mapService.addMarker(map, homePos, undefined, "美丽园小区 (安全中心)");
+
+            // 4. 预设“实时位置”点
+            const currentPos: [number, number] = [HOME_LNG + 0.00025, HOME_LAT + 0.0002];
+            currentLocationMarkerRef.current = mapService.addMarker(map, currentPos,
+                `<div style="background:#6366f1;width:20px;height:20px;border-radius:50%;border:2px solid white;box-shadow:0 0 0 6px rgba(99, 102, 241, 0.25);"></div>`
+            );
+
+            layersRef.current = [];
+            setTimeout(() => {
+                if (!isCancelled && mapRef.current && typeof mapRef.current.resize === 'function') {
+                    mapRef.current.resize();
+                }
+            }, 350);
         };
 
         if (activeTab === 'location' && !isSettingsOpen) {
@@ -597,16 +751,19 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
         return () => {
             isCancelled = true;
-            if ((activeTab !== 'location' || isSettingsOpen) && mapRef.current) {
-                if (mapRef.current.destroy) mapRef.current.destroy();
-                mapRef.current = null;
-                layersRef.current = null;
-                pastPolylineRef.current = null;
-                futurePolylineRef.current = null;
-                userMarkerRef.current = null;
-                currentLocationMarkerRef.current = null;
-                eventMarkersRef.current = [];
-                lastHistoryDataForEventsRef.current = null;
+            if (activeTab !== 'location' || isSettingsOpen) {
+                setUseJsMap(null);
+                if (mapRef.current) {
+                    if (mapRef.current.destroy) mapRef.current.destroy();
+                    mapRef.current = null;
+                    layersRef.current = null;
+                    pastPolylineRef.current = null;
+                    futurePolylineRef.current = null;
+                    userMarkerRef.current = null;
+                    currentLocationMarkerRef.current = null;
+                    eventMarkersRef.current = [];
+                    lastHistoryDataForEventsRef.current = null;
+                }
             }
         }
     }, [activeTab, isSettingsOpen]);
@@ -1414,7 +1571,46 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         </div>
     );
 
-    const HealthTab = () => (
+    const HealthTab = () => {
+        const totalSleepHours = mockSleepData.reduce((acc, d) => (d.name === '深睡' || d.name === '浅睡') ? acc + d.hours : acc, 0);
+        const deepSleepHours = mockSleepData.find(d => d.name === '深睡')?.hours ?? 0;
+        const lightSleepHours = mockSleepData.find(d => d.name === '浅睡')?.hours ?? 0;
+        const awakeHours = mockSleepData.find(d => d.name === '清醒')?.hours ?? 0;
+        const deepRatio = totalSleepHours > 0 ? deepSleepHours / totalSleepHours : 0;
+        const sleepMinutes = Math.round(totalSleepHours * 60);
+        const displayHours = Math.floor(sleepMinutes / 60);
+        const displayMins = sleepMinutes % 60;
+        const sleepDisplay = `${displayHours}小时 ${displayMins > 0 ? displayMins + '分' : '0分'}`;
+
+        const sleepScore = useMemo(() => {
+            let s = 60;
+            if (totalSleepHours >= 7 && totalSleepHours <= 9) s += 20;
+            else if (totalSleepHours >= 6 && totalSleepHours < 7) s += 10;
+            else if (totalSleepHours < 5) s -= 15;
+            if (deepRatio >= 0.25 && deepRatio <= 0.45) s += 15;
+            else if (deepRatio >= 0.2) s += 5;
+            return Math.min(98, Math.max(55, s));
+        }, [totalSleepHours, deepRatio]);
+
+        const { sleepDescription, sleepTipsOrAffirmation } = useMemo(() => {
+            const deepPct = Math.round(deepRatio * 100);
+            let description: string;
+            let tipsOrAffirmation: string;
+
+            if (totalSleepHours >= 7 && deepRatio >= 0.25) {
+                description = `昨日共睡 ${displayHours} 小时${displayMins > 0 ? ' ' + displayMins + ' 分' : ''}，其中深睡 ${deepSleepHours} 小时、浅睡 ${lightSleepHours} 小时。深睡占比约 ${deepPct}%，睡眠时长与结构均良好。`;
+                tipsOrAffirmation = `睡眠情况良好，时长与深睡占比都不错，子女可放心。请继续保持规律作息与良好习惯。`;
+            } else if (totalSleepHours >= 6) {
+                description = `昨日共睡 ${displayHours} 小时${displayMins > 0 ? ' ' + displayMins + ' 分' : ''}，其中深睡 ${deepSleepHours} 小时、浅睡 ${lightSleepHours} 小时${awakeHours > 0 ? '，夜间清醒约 ' + awakeHours + ' 小时' : ''}。深睡占比约 ${deepPct}%，整体尚可，仍有优化空间。`;
+                tipsOrAffirmation = `改善建议（子女可协助）：固定就寝与起床时间；白天适度活动、傍晚避免剧烈运动；睡前 1 小时避免屏幕与咖啡因；午睡不超过 30 分钟；卧室保持安静、昏暗。若持续入睡困难或早醒，可考虑就医排查睡眠障碍。`;
+            } else {
+                description = `昨日共睡 ${displayHours} 小时${displayMins > 0 ? ' ' + displayMins + ' 分' : ''}，其中深睡 ${deepSleepHours} 小时、浅睡 ${lightSleepHours} 小时${awakeHours > 0 ? '，夜间清醒约 ' + awakeHours + ' 小时' : ''}。睡眠时长偏少，深睡占比约 ${deepPct}%。`;
+                tipsOrAffirmation = `改善建议（子女可协助）：固定就寝与起床时间，即使睡得晚也尽量同一时间起床；白天多接触自然光、适度活动；睡前避免饱餐、酒精与咖啡因；减少午睡或控制在 20 分钟内；睡前可做放松活动（如温水泡脚、听轻音乐）。若长期睡眠不足或日间困倦明显，建议到睡眠门诊或神经内科评估。`;
+            }
+            return { sleepDescription: description, sleepTipsOrAffirmation: tipsOrAffirmation };
+        }, [totalSleepHours, deepRatio, deepSleepHours, lightSleepHours, awakeHours, displayHours, displayMins]);
+
+        return (
         <div className="flex flex-col gap-6 p-4 pb-24 animate-fade-in-up">
             <h2 className="text-xl font-bold text-slate-800 px-1">健康生命体征</h2>
 
@@ -1458,9 +1654,9 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
                 {reportContent && (
                     <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/10 relative z-10 animate-fade-in-up">
-                        <pre className="whitespace-pre-wrap font-sans text-xs leading-relaxed text-indigo-50">
-                            {reportContent}
-                        </pre>
+                        <div className="report-markdown font-sans text-xs leading-relaxed text-indigo-50 [&_h2]:font-bold [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2:first-child]:mt-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2 [&_li]:my-0.5 [&_p]:my-1 [&_strong]:font-semibold">
+                            <ReactMarkdown>{reportContent}</ReactMarkdown>
+                        </div>
                         <button
                             onClick={() => setReportContent(null)}
                             className="mt-3 text-[10px] text-indigo-200 underline opacity-60 hover:opacity-100"
@@ -1492,21 +1688,21 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 </div>
 
                 {cognitiveContent && (
-                    <div className="mt-2 p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs text-slate-600 leading-relaxed whitespace-pre-wrap animate-fade-in">
-                        {cognitiveContent}
+                    <div className="mt-2 p-3 bg-slate-50 rounded-xl border border-slate-100 text-xs text-slate-600 leading-relaxed animate-fade-in report-markdown [&_h2]:font-bold [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1 [&_h2:first-child]:mt-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ul]:my-2 [&_li]:my-0.5 [&_p]:my-1 [&_strong]:font-semibold [&_strong]:text-slate-700">
+                        <ReactMarkdown>{cognitiveContent}</ReactMarkdown>
                     </div>
                 )}
             </div>
 
-            {/* Sleep Card (Restored Circular Score) */}
+            {/* Sleep Card (Restored Circular Score + Auto Description & Tips) */}
             <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm flex flex-col gap-4">
                 <div className="flex justify-between items-center">
                     <div>
                         <h3 className="text-base font-bold text-slate-700">睡眠质量分析</h3>
-                        <p className="text-sm text-slate-500 mt-1">昨日睡眠 <span className="font-bold text-slate-800">8小时 12分</span></p>
+                        <p className="text-sm text-slate-500 mt-1">昨日睡眠 <span className="font-bold text-slate-800">{sleepDisplay}</span></p>
                     </div>
                     <div className="w-16 h-16 rounded-full border-4 border-indigo-500 flex items-center justify-center bg-indigo-50 text-indigo-700 font-bold text-lg">
-                        88
+                        {sleepScore}
                     </div>
                 </div>
 
@@ -1522,67 +1718,169 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                         </div>
                     ))}
                 </div>
-            </div>
-        </div>
-    );
 
-    const MedicationTab = () => (
-        <div className="flex flex-col gap-5 p-5 pb-24 animate-fade-in-up">
-            <div className="flex justify-between items-center mb-2">
-                <h2 className="text-2xl font-bold text-slate-800">用药管理</h2>
-                <button className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-lg shadow-indigo-200">
-                    + 添加药物
-                </button>
-            </div>
-
-            <div className="space-y-4">
-                {/* Item 1 */}
-                <div className="flex items-center p-4 border border-slate-100 rounded-2xl bg-slate-50 opacity-60">
-                    <div className="w-12 h-12 bg-slate-200 rounded-full flex items-center justify-center mr-4">
-                        <ShieldCheck className="text-slate-500" size={20} />
-                    </div>
-                    <div className="flex-1">
-                        <h4 className="font-bold text-slate-700 line-through">阿司匹林肠溶片</h4>
-                        <p className="text-sm text-slate-500">100mg · 每日一次 · 饭后</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-1 rounded">已服用</p>
-                        <p className="text-xs text-slate-400 mt-1">08:05 AM</p>
-                    </div>
-                </div>
-
-                {/* Item 2 */}
-                <div className="flex items-center p-4 border border-indigo-100 rounded-2xl bg-indigo-50/50">
-                    <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center mr-4">
-                        <Clock className="text-indigo-600" size={20} />
-                    </div>
-                    <div className="flex-1">
-                        <h4 className="font-bold text-slate-800">维生素 D 滴剂</h4>
-                        <p className="text-sm text-slate-500">400IU · 随餐服用</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs font-bold text-indigo-600 bg-indigo-100 px-2 py-1 rounded">即将</p>
-                        <p className="text-xs text-slate-500 mt-1">12:30 PM</p>
-                    </div>
-                </div>
-
-                {/* Item 3 */}
-                <div className="flex items-center p-4 border border-slate-100 rounded-2xl">
-                    <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mr-4">
-                        <Clock className="text-slate-400" size={20} />
-                    </div>
-                    <div className="flex-1">
-                        <h4 className="font-bold text-slate-800">二甲双胍缓释片</h4>
-                        <p className="text-sm text-slate-500">0.5g · 每日两次</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded">待定</p>
-                        <p className="text-xs text-slate-400 mt-1">06:00 PM</p>
+                <div className="mt-3 pt-3 border-t border-slate-100 space-y-3">
+                    <p className="text-sm text-slate-600 leading-relaxed">{sleepDescription}</p>
+                    <div className={`text-sm leading-relaxed rounded-xl p-3 ${totalSleepHours >= 7 && deepRatio >= 0.25 ? 'bg-emerald-50 text-emerald-800 border border-emerald-100' : 'bg-amber-50 text-amber-900 border border-amber-100'}`}>
+                        <p>{sleepTipsOrAffirmation}</p>
                     </div>
                 </div>
             </div>
         </div>
-    );
+        );
+    };
+
+    const MedicationTab = () => {
+        const [medications, setMedications] = useState<Medication[]>(() => medicationService.getMedications());
+        const [showAddModal, setShowAddModal] = useState(false);
+        const [form, setForm] = useState({
+            name: '',
+            dosage: '',
+            frequency: '每日1次',
+            timesStr: '08:00',
+            instructions: '',
+            purpose: '',
+            imageUrl: '',
+        });
+
+        const refreshList = () => setMedications(medicationService.getMedications());
+
+        const normalizeTime = (s: string): string => {
+            const t = s.trim();
+            const m = t.match(/^(\d{1,2}):(\d{2})$/);
+            if (m) return m[1].padStart(2, '0') + ':' + m[2].padStart(2, '0');
+            if (/^\d{4}$/.test(t)) return t.slice(0, 2) + ':' + t.slice(2);
+            return t;
+        };
+
+        const handleAddSubmit = () => {
+            const name = form.name.trim();
+            const dosage = form.dosage.trim();
+            const instructions = form.instructions.trim();
+            const purpose = form.purpose.trim();
+            const rawTimes = form.timesStr.split(/[,，\s]+/).map((t) => normalizeTime(t.trim())).filter((t) => /^\d{2}:\d{2}$/.test(t));
+            const times = rawTimes.length > 0 ? rawTimes : ['08:00'];
+            if (!name || !dosage || !instructions || !purpose) return;
+            medicationService.addMedication({
+                name,
+                dosage,
+                frequency: form.frequency.trim() || '每日1次',
+                times,
+                instructions,
+                purpose,
+                imageUrl: form.imageUrl.trim() || undefined,
+            });
+            refreshList();
+            setForm({ name: '', dosage: '', frequency: '每日1次', timesStr: '08:00', instructions: '', purpose: '', imageUrl: '' });
+            setShowAddModal(false);
+        };
+
+        const nowTime = new Date().toTimeString().slice(0, 5);
+        const todayLogs = medicationService.getTodayLogs();
+
+        const getMedicationStatus = (med: Medication): { label: string; cls: string; nextTime?: string } => {
+            const takenToday = todayLogs.filter((l) => l.medicationId === med.id && l.status === 'taken');
+            if (takenToday.length > 0) {
+                const last = takenToday[takenToday.length - 1];
+                return { label: '已服用', cls: 'text-emerald-600 bg-emerald-100', nextTime: last.actualTime || last.scheduledTime };
+            }
+            const nextTime = med.times.find((t) => t >= nowTime) || med.times[0];
+            return { label: '待定', cls: 'text-slate-500 bg-slate-100', nextTime };
+        };
+
+        return (
+            <div className="flex flex-col gap-5 p-5 pb-24 animate-fade-in-up">
+                <div className="flex justify-between items-center mb-2">
+                    <h2 className="text-2xl font-bold text-slate-800">用药管理</h2>
+                    <button
+                        onClick={() => setShowAddModal(true)}
+                        className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-lg shadow-indigo-200 active:scale-95"
+                    >
+                        <Plus size={16} /> 添加药物
+                    </button>
+                </div>
+
+                <div className="space-y-4">
+                    {medications.length === 0 ? (
+                        <div className="text-center py-8 text-slate-500 text-sm">暂无药物，点击「添加药物」添加</div>
+                    ) : (
+                        medications.map((med) => {
+                            const status = getMedicationStatus(med);
+                            return (
+                                <div key={med.id} className="flex items-center p-4 border border-slate-100 rounded-2xl bg-white shadow-sm">
+                                    <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mr-4 overflow-hidden">
+                                        {med.imageUrl ? (
+                                            <img src={med.imageUrl} alt={med.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                            <Pill className="text-slate-500" size={20} />
+                                        )}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                        <h4 className="font-bold text-slate-800 truncate">{med.name}</h4>
+                                        <p className="text-sm text-slate-500">{med.dosage} · {med.frequency} · {med.instructions}</p>
+                                    </div>
+                                    <div className="text-right shrink-0">
+                                        <span className={`text-xs font-bold px-2 py-1 rounded ${status.cls}`}>{status.label}</span>
+                                        {status.nextTime && <p className="text-xs text-slate-400 mt-1">{status.nextTime}</p>}
+                                    </div>
+                                </div>
+                            );
+                        })
+                    )}
+                </div>
+
+                {showAddModal && (
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50" onClick={() => setShowAddModal(false)}>
+                        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm max-h-[85vh] overflow-y-auto no-scrollbar" onClick={(e) => e.stopPropagation()}>
+                            <div className="sticky top-0 bg-white border-b border-slate-100 px-4 py-3 flex items-center justify-between">
+                                <h3 className="font-bold text-slate-800">添加药物</h3>
+                                <button className="p-1.5 text-slate-400 hover:text-slate-600 rounded-full" onClick={() => setShowAddModal(false)}><X size={18} /></button>
+                            </div>
+                            <div className="p-4 space-y-3">
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">药名 <span className="text-rose-500">*</span></label>
+                                    <input type="text" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="如：阿司匹林" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">剂量 <span className="text-rose-500">*</span></label>
+                                    <input type="text" value={form.dosage} onChange={(e) => setForm((f) => ({ ...f, dosage: e.target.value }))} placeholder="如：100mg，1片" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">服用频率</label>
+                                    <select value={form.frequency} onChange={(e) => setForm((f) => ({ ...f, frequency: e.target.value }))} className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm">
+                                        <option>每日1次</option>
+                                        <option>每日2次</option>
+                                        <option>每日3次</option>
+                                        <option>隔日1次</option>
+                                        <option>按需服用</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">服用时间 <span className="text-rose-500">*</span></label>
+                                    <input type="text" value={form.timesStr} onChange={(e) => setForm((f) => ({ ...f, timesStr: e.target.value }))} placeholder="多个用逗号分隔，如 08:00,20:00" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">服用说明 <span className="text-rose-500">*</span></label>
+                                    <input type="text" value={form.instructions} onChange={(e) => setForm((f) => ({ ...f, instructions: e.target.value }))} placeholder="如：饭后服用、温水送服" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">用途 <span className="text-rose-500">*</span></label>
+                                    <input type="text" value={form.purpose} onChange={(e) => setForm((f) => ({ ...f, purpose: e.target.value }))} placeholder="如：控制血压、控制血糖" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">药物图片 URL（选填）</label>
+                                    <input type="text" value={form.imageUrl} onChange={(e) => setForm((f) => ({ ...f, imageUrl: e.target.value }))} placeholder="可选" className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm" />
+                                </div>
+                            </div>
+                            <div className="p-4 pt-0">
+                                <button onClick={handleAddSubmit} className="w-full py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-semibold active:scale-[0.98]">保存</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    };
 
 
 
@@ -1636,6 +1934,14 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                                     displayAddress={displayAddress}
                                     addressLoading={addressLoading}
                                     latLngText={latLngText}
+                                    locationPhotoItems={locationPhotoItems}
+                                    useJsMap={useJsMap}
+                                    topMapStaticUrl={topMapStaticUrl}
+                                    staticMapCenter={currentLngLat}
+                                    homePos={HOME_POS}
+                                    geofenceRadiusDeg={SAFE_ZONE_RADIUS_DEG}
+                                    environmentAnalysis={environmentAnalysis}
+                                    environmentAnalysisLoading={environmentAnalysisLoading}
                                 />
                             )}
                             {activeTab === 'medication' && <MedicationTab />}

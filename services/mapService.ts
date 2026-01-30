@@ -119,11 +119,11 @@ class MapService {
             return true;
         }
 
-        const key = import.meta.env.VITE_AMAP_KEY;
+        const key = import.meta.env.VITE_AMAP_JS_KEY;
         const securityCode = import.meta.env.VITE_AMAP_SECURITY_CODE;
 
-        if (!key || key === 'your_amap_key_here') {
-            console.warn('[MapService] 未配置高德地图API Key');
+        if (!key || key === 'your_amap_js_key_here') {
+            console.warn('[MapService] 未配置高德 JS API Key (VITE_AMAP_JS_KEY)');
             return false;
         }
 
@@ -179,16 +179,62 @@ class MapService {
     }
 
     /**
-     * 逆地理编码：坐标转详细地址（供家属定位用）
+     * 逆地理编码（Web 服务 API）：坐标转详细地址，不依赖 JS SDK，使用同一 Key 即可
+     * 文档：https://lbs.amap.com/api/webservice/guide/api/georegeo
+     */
+    async reverseGeocodeWeb(lng: number, lat: number): Promise<ReverseGeocodeResult> {
+        const key = import.meta.env.VITE_AMAP_WEB_KEY;
+        if (!key || key === 'your_amap_web_key_here') {
+            return { success: false, error: '未配置高德 Web 服务 Key (VITE_AMAP_WEB_KEY)' };
+        }
+        const location = `${lng.toFixed(6)},${lat.toFixed(6)}`;
+        const url = `https://restapi.amap.com/v3/geocode/regeo?key=${encodeURIComponent(key)}&location=${encodeURIComponent(location)}&radius=500&output=json`;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status !== '1' || !data.regeocode) {
+                return { success: false, error: data.info || '逆地理编码失败' };
+            }
+            const r = data.regeocode;
+            const addr = r.addressComponent || {};
+            const streetNumber = addr.streetNumber || {};
+            const streetStr = typeof streetNumber === 'object' && streetNumber.street
+                ? [streetNumber.street, streetNumber.number].filter(Boolean).join('')
+                : (addr.street || '');
+            return {
+                success: true,
+                formattedAddress: r.formatted_address || r.formattedAddress || '',
+                addressComponent: {
+                    province: addr.province,
+                    city: addr.city,
+                    citycode: addr.citycode,
+                    district: addr.district,
+                    adcode: addr.adcode,
+                    township: addr.township,
+                    street: streetStr || addr.street,
+                    streetNumber: typeof addr.streetNumber === 'string' ? addr.streetNumber : (streetNumber?.number || ''),
+                },
+            };
+        } catch (e) {
+            console.error('[MapService] reverseGeocodeWeb 请求失败:', e);
+            return { success: false, error: String(e) };
+        }
+    }
+
+    /**
+     * 逆地理编码：坐标转详细地址（优先 Web 服务 API，失败时尝试 JS SDK）
      */
     async reverseGeocode(lng: number, lat: number): Promise<ReverseGeocodeResult> {
-        if (!await this.init()) {
-            return { success: false, error: '地图服务未初始化' };
-        }
+        const web = await this.reverseGeocodeWeb(lng, lat);
+        if (web.success) return web;
 
+        if (!await this.init()) {
+            return { success: false, error: web.error || '地图服务未初始化' };
+        }
         return new Promise((resolve) => {
-            const geocoder = new this.AMap!.Geocoder({ radius: 500 });
-            geocoder.getAddress([lng, lat], (status, result) => {
+            const GeocoderCtor = this.AMap!.Geocoder as new (opts?: { radius?: number }) => GeocoderService;
+            const geocoder = new GeocoderCtor({ radius: 500 });
+            geocoder.getAddress([lng, lat], (status: string, result: any) => {
                 if (status === 'complete' && result.regeocode) {
                     const regeo = result.regeocode;
                     resolve({
@@ -530,6 +576,82 @@ class MapService {
         if (map) {
             map.clearMap();
         }
+    }
+
+    /**
+     * 周边 POI（Web 服务 API）：根据当前经纬度获取附近地点，用于“当前位置相关”展示
+     * 文档：https://lbs.amap.com/api/webservice/guide/api-advanced/search
+     */
+    async getNearbyPoisWeb(lng: number, lat: number, radius: number = 500, limit: number = 6): Promise<{ name: string; type: string; photoUrl?: string }[]> {
+        const key = import.meta.env.VITE_AMAP_WEB_KEY;
+        if (!key || key === 'your_amap_web_key_here') return [];
+        const location = `${lng.toFixed(6)},${lat.toFixed(6)}`;
+        const url = `https://restapi.amap.com/v3/place/around?key=${encodeURIComponent(key)}&location=${encodeURIComponent(location)}&radius=${radius}&types=120000|141200&offset=${Math.min(25, limit)}&page=1&extensions=all`;
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.status !== '1' || !Array.isArray(data.pois)) return [];
+            return data.pois.slice(0, limit).map((p: any) => ({
+                name: p.name || '',
+                type: p.type || '',
+                photoUrl: p.photos && Array.isArray(p.photos) && p.photos[0] ? p.photos[0].url : undefined,
+            }));
+        } catch (e) {
+            console.error('[MapService] getNearbyPoisWeb 请求失败:', e);
+            return [];
+        }
+    }
+
+    /**
+     * 获取高德静态地图图片 URL（上方定位图、多模态等）
+     * 使用 Web 服务静态地图 API，返回以指定经纬度为中心的地图截图 URL
+     * @param lng 经度
+     * @param lat 纬度
+     * @param width 图片宽度，默认 600
+     * @param height 图片高度，默认 300
+     * @returns 静态地图图片 URL，未配置 Key 时返回空字符串
+     */
+    getStaticMapUrl(lng: number, lat: number, width: number = 600, height: number = 300): string {
+        const key = import.meta.env.VITE_AMAP_WEB_KEY;
+        if (!key || key === 'your_amap_web_key_here') {
+            return '';
+        }
+        const location = `${lng.toFixed(6)},${lat.toFixed(6)}`;
+        const size = `${Math.min(1024, width)}*${Math.min(1024, height)}`;
+        // markers 格式：size,color,label:经度,纬度（高德要求逗号分隔，不 encode 整段）
+        const markers = `mid,,A:${location}`;
+        const base = 'https://restapi.amap.com/v3/staticmap';
+        const q = `location=${encodeURIComponent(location)}&zoom=16&size=${size}&markers=${encodeURIComponent(markers)}&key=${encodeURIComponent(key)}`;
+        return `${base}?${q}`;
+    }
+
+    /**
+     * 将经纬度转换为静态地图图片内的像素坐标（与高德静态图 zoom 一致，Web Mercator）
+     * 用于在静态图上方叠加轨迹、当前位置点等
+     */
+    latLngToStaticMapPx(
+        lng: number,
+        lat: number,
+        centerLng: number,
+        centerLat: number,
+        zoom: number,
+        imgWidth: number,
+        imgHeight: number
+    ): { x: number; y: number } {
+        const n = 256 * Math.pow(2, zoom);
+        const toRad = (d: number) => (d * Math.PI) / 180;
+        const latRad = toRad(lat);
+        const centerLatRad = toRad(centerLat);
+        const worldX = ((lng + 180) / 360) * n;
+        const worldY =
+            ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+        const centerWorldX = ((centerLng + 180) / 360) * n;
+        const centerWorldY =
+            ((1 - Math.log(Math.tan(centerLatRad) + 1 / Math.cos(centerLatRad)) / Math.PI) / 2) * n;
+        return {
+            x: worldX - centerWorldX + imgWidth / 2,
+            y: worldY - centerWorldY + imgHeight / 2,
+        };
     }
 }
 

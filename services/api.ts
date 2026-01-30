@@ -446,9 +446,13 @@ export const ApiHealth = {
       ApiHealth.checkReadyPlayerMe(),
     ]);
 
-    // 高德地图检查
-    const amapKey = import.meta.env.VITE_AMAP_KEY;
-    const amap = !!(amapKey && amapKey !== 'your_amap_key_here');
+    // 高德地图检查（JS API 或 Web 服务任一配置即可）
+    const amapJsKey = import.meta.env.VITE_AMAP_JS_KEY;
+    const amapWebKey = import.meta.env.VITE_AMAP_WEB_KEY;
+    const amap = !!(
+      (amapJsKey && amapJsKey !== 'your_amap_js_key_here') ||
+      (amapWebKey && amapWebKey !== 'your_amap_web_key_here')
+    );
 
     // FunASR检查
     const funAsrUrl = import.meta.env.VITE_FUNASR_WS_URL;

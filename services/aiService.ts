@@ -1,8 +1,10 @@
 /**
  * AI 对话服务
- * 接入 Gemini API 实现智能对话
- * 支持老人档案记忆和个性化回复
+ * 接入 Groq API 实现智能对话
+ * 支持老人档案记忆、个性化回复及子女端设置的用药提醒
  */
+
+import { medicationService } from './medicationService';
 
 // 老人档案数据结构
 export interface ElderlyProfile {
@@ -206,6 +208,20 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
 `;
         }
 
+        // 子女端设置的用药计划与今日提醒（与家属端用药管理同步）
+        const medications = medicationService.getMedications();
+        const todayLogs = medicationService.getTodayLogs();
+        const nextMed = medicationService.getNextMedicationTime();
+        if (medications.length > 0) {
+            prompt += `
+【当前用药与今日提醒】（由家属在子女端设置，请据此提醒老人按时按量服药）
+当前药物列表（名称 / 剂量 / 频率 / 服用时间 / 服用说明 / 用途）：
+${medications.map(m => `- ${m.name}：${m.dosage}，${m.frequency}，每天 ${m.times.join('、')}，${m.instructions}。用途：${m.purpose}`).join('\n')}
+今日已服用记录：${todayLogs.length > 0 ? todayLogs.map(l => `${l.medicationName}（${l.scheduledTime}）`).join('、') : '暂无'}
+${nextMed ? `下次应服药：${nextMed.medication.name}，时间 ${nextMed.time}，${nextMed.medication.dosage}，${nextMed.medication.instructions}。` : '今日计划内服药均已提醒或已服用。'}
+请在与老人对话中：若老人问到吃药、该吃什么药、吃药提醒等，根据上述信息回答并提醒按时按量；若快到或已到服药时间且今日尚未服用该次，主动提醒"该吃某某药了，某某剂量，某某服用说明"。`;
+        }
+
         return prompt;
     }
 
@@ -317,9 +333,29 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
             return { text: '好的，我来帮您导航。', shouldTriggerAction: 'nav' };
         }
 
-        // 药物相关 - 触发场景
-        if (lowerText.includes('药') || lowerText.includes('吃药')) {
-            return { text: '好的，我来帮您看看药。', shouldTriggerAction: 'meds' };
+        // 药物相关 - 根据子女端设置的用药信息提醒按时按量
+        if (lowerText.includes('药') || lowerText.includes('吃药') || lowerText.includes('服药') || lowerText.includes('用药') || lowerText.includes('怎么吃')) {
+            const nextMed = medicationService.getNextMedicationTime();
+            const meds = medicationService.getMedications();
+            const todayLogs = medicationService.getTodayLogs();
+            const nowTime = new Date().toTimeString().slice(0, 5);
+            if (meds.length === 0) {
+                return { text: '目前没有设置需要服用的药，您要是需要吃药可以跟家人说一声。', shouldTriggerAction: 'meds' };
+            }
+            if (nextMed) {
+                const { medication, time } = nextMed;
+                const taken = todayLogs.some(l => l.medicationId === medication.id && l.scheduledTime === time && l.status === 'taken');
+                if (taken) {
+                    const allSlots = meds.flatMap(m => m.times.map(t => ({ med: m, time: t }))).filter(s => s.time > nowTime).sort((a, b) => a.time.localeCompare(b.time));
+                    const nextOther = allSlots[0];
+                    if (nextOther) {
+                        return { text: `您${time}的${medication.name}已经记上了。下次是${nextOther.time}吃${nextOther.med.name}，${nextOther.med.dosage}，${nextOther.med.instructions}。`, shouldTriggerAction: 'meds' };
+                    }
+                    return { text: '您今天的药都记上了，记得多喝水哦。', shouldTriggerAction: 'meds' };
+                }
+                return { text: `该吃${medication.name}了。${medication.dosage}，${medication.instructions}。记得按时吃哦。`, shouldTriggerAction: 'meds' };
+            }
+            return { text: `您今天计划内的药都提醒过了。当前设置的有：${meds.map(m => m.name).join('、')}，按设置的时间服用即可。`, shouldTriggerAction: 'meds' };
         }
 
         // 照片/回忆相关 - 触发场景
@@ -500,6 +536,195 @@ ${this.profile.memories.map(m => `- ${m.content}`).join('\n')}
         const isNegative = text.includes('不') || text.includes('别');
 
         return hasKeyword && isShort && !isNegative;
+    }
+
+    /**
+     * 一次性调用 Groq API（不写入对话历史），用于健康简报等
+     */
+    private async callGroqOnce(systemContent: string, userContent: string, options?: { maxTokens?: number }): Promise<string> {
+        const apiKey = this.getApiKey();
+        const url = 'https://api.groq.com/openai/v1/chat/completions';
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model: 'llama-3.1-8b-instant',
+                messages: [
+                    { role: 'system', content: systemContent },
+                    { role: 'user', content: userContent },
+                ],
+                temperature: 0.5,
+                max_tokens: options?.maxTokens ?? 400,
+            }),
+        });
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`API error: ${response.status} ${errText}`);
+        }
+        const data = await response.json();
+        return data.choices?.[0]?.message?.content?.trim() || '';
+    }
+
+    /**
+     * 生成 AI 健康日报简报（子女端）：结合心率、血压、睡眠数据做详细分析并给出建议
+     * @param vitalSigns 体征：bpm, pressure, sleep 等
+     * @param recentLogs 近期日志（可选）
+     */
+    async generateHealthBrief(
+        vitalSigns: { bpm?: number; pressure?: string; sleep?: number },
+        _recentLogs: unknown[]
+    ): Promise<string> {
+        const bpm = vitalSigns.bpm ?? 75;
+        const pressure = vitalSigns.pressure ?? '120/80';
+        const sleep = vitalSigns.sleep ?? 7;
+
+        if (!this.getApiKey()) {
+            return this.buildLocalHealthBrief(bpm, pressure, sleep);
+        }
+
+        const system = `你是老年健康助理，面向家属撰写「今日健康日报」。要求：
+1. 数据解读：必须结合本次提供的心率、血压、睡眠具体数值，逐项简要分析（是否在正常范围、有无需关注趋势）。
+2. 综合评估：根据三项数据给出整体评估（平稳/需关注/建议就医等）。
+3. 建议与指导：给出 2～4 条具体、可操作的生活与照护建议（如饮食、活动、用药、复测、就医时机等），语气温和、易懂。
+4. 输出格式：请使用 Markdown 书写，便于前端渲染。例如：
+   - 用 ## 作为小节标题（如 ## 今日数据、## 分析与建议）
+   - 用 - 或 * 列出要点
+   - 可用 **加粗** 强调关键结论
+   - 段落之间空一行。只输出正文，不要最外层「简报：」等前缀。`;
+
+        const user = `请根据以下今日体征数据生成健康日报（含详细分析与建议），使用 Markdown 格式输出：
+- 心率：${bpm} 次/分
+- 血压：${pressure} mmHg
+- 睡眠：${sleep} 小时
+
+请逐项分析并给出具体建议，使用 ## 小节标题和 - 列表。`;
+
+        try {
+            const text = await this.callGroqOnce(system, user, { maxTokens: 800 });
+            return text || this.buildLocalHealthBrief(bpm, pressure, sleep);
+        } catch (e) {
+            console.warn('[AI] generateHealthBrief failed:', e);
+            return this.buildLocalHealthBrief(bpm, pressure, sleep);
+        }
+    }
+
+    /**
+     * 本地兜底：根据心率、血压、睡眠数值生成简要分析与建议（无 API 或调用失败时）
+     */
+    private buildLocalHealthBrief(bpm: number, pressure: string, sleep: number): string {
+        const lines: string[] = [];
+        lines.push(`## 今日数据\n\n心率 **${bpm}** 次/分，血压 **${pressure}** mmHg，睡眠 **${sleep}** 小时。`);
+        lines.push(`## 分析与建议\n`);
+
+        if (bpm < 60) lines.push(`- **心率**：偏慢，建议避免剧烈活动，如有头晕、乏力可就医复查。`);
+        else if (bpm <= 100) lines.push(`- **心率**：在常见正常范围内。`);
+        else lines.push(`- **心率**：偏快，建议休息、避免激动与饱餐，持续偏高需监测或就医。`);
+
+        const [systolicStr, diastolicStr] = pressure.split('/').map(s => s.trim());
+        const sys = parseInt(systolicStr, 10) || 120;
+        const dia = parseInt(diastolicStr, 10) || 80;
+        if (sys >= 140 || dia >= 90) lines.push(`- **血压**：偏高，建议低盐饮食、按时服药、每日定时测量，控制不佳请就医。`);
+        else if (sys >= 130 || dia >= 85) lines.push(`- **血压**：接近上限，建议注意饮食与作息，继续监测。`);
+        else lines.push(`- **血压**：在理想范围内，请保持当前生活习惯与用药。`);
+
+        if (sleep < 5) lines.push(`- **睡眠**：偏少，建议固定就寝时间、减少午睡与晚间屏幕使用，必要时咨询医生。`);
+        else if (sleep < 7) lines.push(`- **睡眠**：略少，可适当增加午休或提前就寝。`);
+        else lines.push(`- **睡眠**：时长充足，有利于身体恢复。`);
+
+        lines.push(`- **整体建议**：规律作息、适量饮水、按时服药，如有不适及时联系医生或家属。`);
+        return lines.join('\n');
+    }
+
+    /**
+     * 生成 NLP 语言认知分析报告（子女端）：含具体场景描述与子女照护建议
+     * @param history 交互/多模态历史（可选），可包含时间、场景、对话或行为片段
+     */
+    async generateCognitiveReport(history: unknown[]): Promise<string> {
+        if (!this.getApiKey()) {
+            return this.buildLocalCognitiveReport(history);
+        }
+
+        const system = `你是老年语言与认知健康助理，面向家属撰写「NLP 语言认知分析报告」。要求必须包含以下两部分，语气客观、温和、易懂。
+
+一、细节描述（体现语言认知能力的表现）
+请从时间、地点、情境、具体动作与语言等维度描述，例如：在什么时间什么场合发生了哪些情况；老人当时说了什么、做了什么，以及这些表现如何反映语言理解、表达、记忆或注意力等方面的变化；若有具体对话或行为片段请简要说明反映的认知特点（如找词困难、重复、答非所问、遗忘近期事等）。
+
+二、子女可做的帮助与建议
+请给出具体、可操作的建议：日常交流上如何与老人对话（语速、重复、确认、耐心倾听）；认知训练上如朗读、回忆一天、看图说话等的频率与方式；生活安排上规律作息、社交、兴趣活动；何时需要就医或做专业评估。
+
+输出格式：请使用 Markdown 书写，便于前端渲染。例如用 ## 作为小节标题（如 ## 细节描述、## 子女建议），用 - 列出要点，可用 **加粗** 强调关键词，段落之间空一行。只输出正文，不要最外层「报告：」等前缀。`;
+
+        const hasHistory = Array.isArray(history) && history.length > 0;
+        const user = hasHistory
+            ? `请根据以下近期交互/行为数据，生成语言认知分析报告（含具体场景细节与子女照护建议），使用 Markdown 格式输出。\n${JSON.stringify(history, null, 2)}`
+            : `近期暂无具体交互数据。请基于老年人常见语言认知表现写一份示范性报告：先举例说明可能出现的细节（如某次早餐时老人叫不出常见物品名称、或重复问同一问题），再给出子女可做的具体帮助与建议。请使用 Markdown 格式（## 小节标题、- 列表、**加粗**）输出。`;
+
+        try {
+            const text = await this.callGroqOnce(system, user, { maxTokens: 1000 });
+            return text || this.buildLocalCognitiveReport(history);
+        } catch (e) {
+            console.warn('[AI] generateCognitiveReport failed:', e);
+            return this.buildLocalCognitiveReport(history);
+        }
+    }
+
+    /**
+     * 本地兜底：无 API 或调用失败时，输出 Markdown 格式（与前端渲染一致）
+     */
+    private buildLocalCognitiveReport(_history: unknown[]): string {
+        const parts: string[] = [];
+
+        parts.push(`## 细节描述（可能体现语言认知变化的场景）\n\n观察时可从以下维度记录：\n\n- **时间与场合**：例如上周二早餐时在家中厨房、昨晚睡前在客厅\n- **具体情况**：当时在做什么、和谁在一起；老人说了什么、有无重复提问、叫不出常见物品名称、答非所问、忘记刚说过的话、说话中途卡住等\n- **可能反映**：找词困难、短期记忆下降、注意力分散、理解或表达变慢等，需结合出现频率与是否加重综合判断`);
+
+        parts.push(`## 子女可做的帮助与建议\n\n- **日常交流**：放慢语速、一次只问一件事；老人说不清时耐心等待、用简单词确认（如「您是说……吗」）；多倾听、少打断\n- **认知与语言练习**：每天固定时间一起读报或看图说话 10～15 分钟；鼓励回忆「今天做了什么」；玩简单数字或词语游戏，以轻松、鼓励为主\n- **生活与社交**：保持规律作息、白天适度活动；尽量有人陪伴聊天、减少长时间独处；保留其喜欢的爱好（下棋、听戏等），在安全前提下鼓励参与\n- **就医与评估**：若出现频繁忘事、迷路、性格明显改变、交流明显困难或加重，建议尽早到记忆门诊或神经内科做评估，早干预有利于延缓进展`);
+
+        return parts.join('\n\n');
+    }
+
+    /**
+     * 环境语义分析（子女端）：基于当前位置地址与周边 POI，用 Groq 分析老人周边环境是否安全、描述地理位置特征，帮助子女确认老人所在地
+     */
+    async analyzeEnvironmentForGuardian(address: string, nearbyPoiNames: string[]): Promise<string> {
+        if (!this.getApiKey()) {
+            return this.buildLocalEnvironmentAnalysis(address, nearbyPoiNames);
+        }
+        const system = `你是老年照护场景下的环境分析助手，面向家属（子女）撰写「环境语义分析」。必须使用 Markdown 格式输出，保证结构清晰、重点突出。
+
+输入：老人当前定位的详细地址、以及距离最近的若干周边地点名称（POI）。
+
+输出要求（严格按以下结构，使用 Markdown）：
+1. 使用 ## 作为小节标题，至少包含：## 安全评估、## 地理位置特征。
+2. **安全评估**：结合地址与周边 POI，判断老人所处环境是否安全；用 **加粗** 标出结论（如 **环境安全** / **需关注** / **建议确认**）；可再用 - 列出 1～3 条要点（如是否在小区内、是否靠近主干道/路口、有无明显风险）。
+3. **地理位置特征**：用 2～4 句话描述老人周边地理（如位于某小区东侧、靠近某路与某路交叉、附近有某商场/医院/公园等），便于家属快速确认老人所在位置；关键地标可用 **加粗**。
+4. 段落之间空一行；只输出正文，不要最外层「分析：」等前缀。`;
+
+        const poisText = nearbyPoiNames.length > 0 ? `周边最近地点：${nearbyPoiNames.join('、')}` : '暂无周边地点数据';
+        const user = `老人当前定位地址：${address}\n${poisText}\n\n请按 Markdown 格式输出环境语义分析（含 ## 安全评估、## 地理位置特征，用 **加粗** 标出重点），帮助家属确认老人所在地与环境是否安全。`;
+
+        try {
+            const text = await this.callGroqOnce(system, user, { maxTokens: 600 });
+            return text?.trim() || this.buildLocalEnvironmentAnalysis(address, nearbyPoiNames);
+        } catch (e) {
+            console.warn('[AI] analyzeEnvironmentForGuardian failed:', e);
+            return this.buildLocalEnvironmentAnalysis(address, nearbyPoiNames);
+        }
+    }
+
+    private buildLocalEnvironmentAnalysis(address: string, nearbyPoiNames: string[]): string {
+        const lines: string[] = [];
+        lines.push('## 安全评估');
+        lines.push('- 当前定位：' + (address || '未知'));
+        if (nearbyPoiNames.length > 0) {
+            lines.push('- 周边最近：' + nearbyPoiNames.join('、'));
+        }
+        lines.push('- **结论**：可根据上述地址与周边地点确认老人所在位置；若在小区内或熟悉场所，**环境相对安全**；若靠近主干道或陌生区域，建议电话确认。');
+        lines.push('');
+        lines.push('## 地理位置特征');
+        lines.push('根据逆地理与周边 POI 显示的位置信息，可对照地图确认老人大致所在区域；如有需要可致电老人或现场确认。');
+        return lines.join('\n');
     }
 }
 
