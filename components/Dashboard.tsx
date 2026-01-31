@@ -9,6 +9,8 @@ import { healthStateService, HealthMetrics } from '../services/healthStateServic
 import { mapService } from '../services/mapService';
 import { medicationService, Medication } from '../services/medicationService';
 import { faceService, FaceData } from '../services/faceService';
+import { ALBUM_MEMORIES } from '../config/albumMemories';
+import { FACE_RECOGNITION_CONFIG } from '../config/faceRecognition';
 import { ShieldCheck, MapPin, Heart, Pill, AlertTriangle, Phone, Activity, Clock, User, Calendar, LayoutGrid, FileText, Settings, ChevronRight, Eye, Brain, Layers, Play, Pause, SkipBack, SkipForward, History, AlertCircle, Signal, Wifi, Battery, Moon, Footprints, Sun, Cloud, ArrowLeft, Mic, Upload, Sparkles, CheckCircle, Volume2, ToggleRight, Loader2, ScanFace, Box, Wand2, Plus, X, Users, Camera } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, AreaChart, Area, BarChart, Bar, CartesianGrid } from 'recharts';
 import ReactMarkdown from 'react-markdown';
@@ -1751,40 +1753,62 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
         return (
             <div className="flex flex-col gap-5 p-5 pb-24 animate-fade-in-up">
-                <div className="flex justify-between items-center mb-2">
-                    <h2 className="text-2xl font-bold text-slate-800">人脸相册</h2>
-                    <button
-                        onClick={() => setShowAddModal(true)}
-                        className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-lg shadow-indigo-200 active:scale-95"
-                    >
-                        <Plus size={16} /> 添加照片
-                    </button>
+                {/* 时光相册：老人端展示的回忆照片 */}
+                <div>
+                    <h2 className="text-xl font-bold text-slate-800 mb-3">时光相册</h2>
+                    <p className="text-xs text-slate-500 mb-3">老人端相册中的照片，用于回忆唤起</p>
+                    <div className="grid grid-cols-2 gap-3">
+                        {ALBUM_MEMORIES.map((photo) => (
+                            <div key={photo.id} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+                                <div className="aspect-square rounded-xl overflow-hidden bg-slate-100 mb-2">
+                                    <img src={photo.url} alt={photo.location} className="w-full h-full object-cover" />
+                                </div>
+                                <h4 className="font-bold text-slate-800 text-sm truncate">{photo.location}</h4>
+                                <p className="text-xs text-slate-500 mt-0.5 truncate">{photo.date}</p>
+                            </div>
+                        ))}
+                    </div>
                 </div>
 
+                {/* 人脸相册：用于老人端人脸识别的亲属照片 */}
+                <div>
+                    <div className="flex justify-between items-center mb-3">
+                        <h2 className="text-xl font-bold text-slate-800">人脸相册</h2>
+                        <button
+                            onClick={() => setShowAddModal(true)}
+                            className="flex items-center gap-1.5 bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-semibold shadow-lg shadow-indigo-200 active:scale-95"
+                        >
+                            <Plus size={16} /> 添加照片
+                        </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mb-3">老人说不认识时可识别人脸，下方为预设亲属照片</p>
+
                 <div className="grid grid-cols-2 gap-4">
-                    {faces.length === 0 ? (
-                        <div className="col-span-2 text-center py-12 text-slate-400 text-sm bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
-                            <Camera size={32} className="mx-auto mb-3 text-slate-300" />
-                            <p>暂无照片</p>
-                            <p className="text-xs mt-1 text-slate-300">点击右上角添加亲友照片</p>
-                        </div>
-                    ) : (
-                        faces.map((face) => (
-                            <div key={face.id} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 relative group">
-                                <button
-                                    onClick={(e) => handleDelete(face.id, e)}
-                                    className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                                >
-                                    <X size={12} />
-                                </button>
-                                <div className="aspect-square rounded-xl overflow-hidden bg-slate-100 mb-3">
-                                    <img src={face.imageUrl} alt={face.name} className="w-full h-full object-cover" />
-                                </div>
-                                <h4 className="font-bold text-slate-800 text-sm text-center">{face.name}</h4>
-                                <p className="text-xs text-slate-500 text-center mt-0.5">{face.relation}</p>
+                    {FACE_RECOGNITION_CONFIG.map((item) => (
+                        <div key={`preset-${item.file}`} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100">
+                            <div className="aspect-square rounded-xl overflow-hidden bg-slate-100 mb-3">
+                                <img src={`/faces/${item.file}`} alt={item.relation} className="w-full h-full object-cover" />
                             </div>
-                        ))
-                    )}
+                            <h4 className="font-bold text-slate-800 text-sm text-center">{item.name || item.relation}</h4>
+                            <p className="text-xs text-slate-500 text-center mt-0.5">{item.relation}</p>
+                        </div>
+                    ))}
+                    {faces.map((face) => (
+                        <div key={face.id} className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 relative group">
+                            <button
+                                onClick={(e) => handleDelete(face.id, e)}
+                                className="absolute top-2 right-2 p-1.5 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                                <X size={12} />
+                            </button>
+                            <div className="aspect-square rounded-xl overflow-hidden bg-slate-100 mb-3">
+                                <img src={face.imageUrl} alt={face.name} className="w-full h-full object-cover" />
+                            </div>
+                            <h4 className="font-bold text-slate-800 text-sm text-center">{face.name}</h4>
+                            <p className="text-xs text-slate-500 text-center mt-0.5">{face.relation}</p>
+                        </div>
+                    ))}
+                </div>
                 </div>
 
                 {showAddModal && (

@@ -52,7 +52,7 @@ interface ChatMessage {
 export interface AIResponse {
     text: string;
     intent?: string;
-    shouldTriggerAction?: 'nav' | 'meds' | 'memory' | 'call' | null;
+    shouldTriggerAction?: 'nav' | 'meds' | 'memory' | 'face' | 'call' | null;
     actionData?: any;
 }
 
@@ -195,7 +195,7 @@ class AIService {
 3. 语气亲切，用"您"称呼老人，多带关怀与爱护
 4. 关心老人的身体和心情，让老人感受到温暖与安全
 5. 必要时提醒老人吃药、喝水、休息
-6. 如果老人问到需要导航、吃药、看照片的事情，在回复末尾加上特殊标记：[ACTION:nav]、[ACTION:meds]、[ACTION:memory]
+6. 如果老人问到需要导航、吃药、看照片、不认识某人/这个人是谁等事情，在回复末尾加上特殊标记：[ACTION:nav]、[ACTION:meds]、[ACTION:memory]、[ACTION:face]
 
 `;
 
@@ -366,6 +366,11 @@ ${nextMed ? `下次应服药：${nextMed.medication.name}，时间 ${nextMed.tim
             return { text: `您今天计划内的药都提醒过了。当前设置的有：${meds.map(m => m.name).join('、')}，按设置的时间服用即可。`, shouldTriggerAction: 'meds' };
         }
 
+        // 人脸识别相关 - 老人不记得/不认识某人时触发
+        if (this.isFaceRecognitionRequest(lowerText)) {
+            return { text: '好的张爷爷，我帮您看看这个人是谁。', shouldTriggerAction: 'face' };
+        }
+
         // 照片/回忆相关 - 触发场景
         if (this.isExplicitMemoryRequest(lowerText, userMessage.length)) {
             return { text: '好的，让我们一起看看老照片吧~', shouldTriggerAction: 'memory' };
@@ -475,6 +480,11 @@ ${nextMed ? `下次应服药：${nextMed.medication.name}，时间 ${nextMed.tim
             return { text: '好的，我来帮您看看药。', shouldTriggerAction: 'meds' };
         }
 
+        // 人脸识别
+        if (lowerText.includes('谁') && (lowerText.includes('认识') || lowerText.includes('不认识') || lowerText.includes('是谁'))) {
+            return { text: '好的张爷爷，我帮您看看这个人是谁。', shouldTriggerAction: 'face' };
+        }
+
         // 照片/回忆
         if (lowerText.includes('照片') || lowerText.includes('回忆')) {
             return { text: '好的，让我们看看老照片。', shouldTriggerAction: 'memory' };
@@ -525,6 +535,18 @@ ${nextMed ? `下次应服药：${nextMed.medication.name}，时间 ${nextMed.tim
      */
     clearHistory(): void {
         this.chatHistory = [];
+    }
+
+    /**
+     * 检查是否为人脸识别请求（老人不记得/不认识某人）
+     */
+    private isFaceRecognitionRequest(text: string): boolean {
+        const keywords = [
+            '这个人我不认识', '这个人是谁', '他是谁', '她是谁', '这是谁', '这人谁', '谁啊', '谁呀',
+            '想不起来是谁', '不记得是谁', '忘了是谁', '记不得是谁', '我不认识', '不认识这人',
+            '这个人是谁啊', '那是谁', '那个是谁', '这人我不认识', '想不起来这人', '忘了这人'
+        ];
+        return keywords.some(k => text.includes(k));
     }
 
     /**

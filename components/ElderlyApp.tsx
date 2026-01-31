@@ -2,6 +2,8 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { SimulationType, SystemStatus, MemoryPhoto } from '../types';
+import { ALBUM_MEMORIES } from '../config/albumMemories';
+import { FACE_RECOGNITION_CONFIG } from '../config/faceRecognition';
 import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as ImageIcon, Images, Volume2, X, CloudSun, Loader2, Navigation, ScanLine, Pill, CheckCircle, ArrowUp, ArrowLeft, ArrowRight, MapPin, Camera, User, ScanFace, Box, AlertCircle, MicOff, Sparkles, Settings, Keyboard, Send } from 'lucide-react';
 import { speechService, SpeechRecognitionResult } from '../services/speechService';
 import { mapService, RouteResult, RouteStep } from '../services/mapService';
@@ -24,13 +26,6 @@ interface ElderlyAppProps {
     status: SystemStatus;
     simulation: SimulationType;
 }
-
-// --- Data ---
-const MOCK_MEMORIES: MemoryPhoto[] = [
-    { id: '1', url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=600&auto=format&fit=crop', date: '1982年 秋', location: '人民公园', story: '这是您和奶奶在人民公园的合影。那时候刚买了第一台胶片相机...', tags: ['家人'] },
-    { id: '2', url: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?q=80&w=600&auto=format&fit=crop', date: '1995年 春节', location: '老家院子', story: '这张是大年初一的全家福。大家围在一起包饺子...', tags: ['春节'] },
-    { id: '3', url: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?q=80&w=600&auto=format&fit=crop', date: '2010年 夏', location: '上海世博会', story: '这是咱们一家去上海看世博会。中国馆真的好壮观...', tags: ['旅行'] }
-];
 
 // --- 3D Avatar Component (Real-time Render) ---
 const CuteAvatar3D = ({ isTalking, isListening, isThinking }: { isTalking: boolean, isListening: boolean, isThinking?: boolean }) => {
@@ -616,24 +611,125 @@ const MedicationFlow = ({ step }: { step: number }) => {
     );
 };
 
-// 3. Immersive Memories Scenario (手动切换模式)
+// 3. Face Recognition Flow (人脸识别 - 帮助老人回忆亲属)
+const FaceRecognitionFlow = ({ step, onClose }: { step: number; onClose: () => void }) => {
+    const selectedFaceRef = useRef(FACE_RECOGNITION_CONFIG[Math.floor(Math.random() * FACE_RECOGNITION_CONFIG.length)]);
+    const face = selectedFaceRef.current;
+    const faceImageUrl = `/faces/${face.file}`;
+    const [hasSpoken, setHasSpoken] = useState(false);
+
+    useEffect(() => {
+        if (step === 3 && !hasSpoken) {
+            setHasSpoken(true);
+            VoiceService.speak(face.description, undefined, undefined, () => {}).catch(() => {});
+        }
+    }, [step, face.description, hasSpoken]);
+
+    useEffect(() => () => VoiceService.stop(), []);
+
+    if (step === 0) {
+        return (
+            <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col animate-fade-in font-sans">
+                <div className="flex-1 flex flex-col items-center justify-center text-white">
+                    <div className="w-24 h-24 rounded-full bg-indigo-500/30 flex items-center justify-center mb-6 animate-pulse">
+                        <Camera size={48} className="text-indigo-300" />
+                    </div>
+                    <p className="text-xl font-bold mb-2">正在打开摄像头...</p>
+                    <p className="text-slate-400 text-sm">请将镜头对准需要识别的人</p>
+                </div>
+                <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center text-white z-10">
+                    <X size={20} />
+                </button>
+            </div>
+        );
+    }
+
+    if (step === 1) {
+        return (
+            <div className="absolute inset-0 z-50 bg-black flex flex-col animate-fade-in font-sans">
+                <div className="flex-1 relative overflow-hidden">
+                    <img src={faceImageUrl} className="w-full h-full object-cover" alt="摄像头画面" />
+                    <div className="absolute inset-0 border-4 border-indigo-400/50 rounded-lg m-4 pointer-events-none">
+                        <div className="absolute top-4 left-4 bg-black/60 text-white px-3 py-1 rounded-full text-sm flex items-center gap-2">
+                            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+                            正在拍摄...
+                        </div>
+                    </div>
+                </div>
+                <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center text-white z-10">
+                    <X size={20} />
+                </button>
+            </div>
+        );
+    }
+
+    if (step === 2) {
+        return (
+            <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col animate-fade-in font-sans">
+                <div className="flex-1 flex flex-col items-center justify-center text-white">
+                    <div className="w-32 h-32 rounded-full border-4 border-indigo-400 flex items-center justify-center mb-6 animate-spin" style={{ animationDuration: '2s' }}>
+                        <ScanFace size={64} className="text-indigo-400" />
+                    </div>
+                    <p className="text-xl font-bold mb-2">正在识别人脸...</p>
+                    <p className="text-slate-400 text-sm">AI 正在分析面部特征</p>
+                </div>
+                <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center text-white z-10">
+                    <X size={20} />
+                </button>
+            </div>
+        );
+    }
+
+    // Step 3: 识别结果
+    return (
+        <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col animate-fade-in font-sans">
+            <div className="flex-1 flex flex-col items-center justify-center p-6">
+                <div className="relative w-48 h-48 rounded-2xl overflow-hidden border-4 border-emerald-400 shadow-2xl mb-6">
+                    <img src={faceImageUrl} className="w-full h-full object-cover" alt={face.relation} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                    <div className="absolute bottom-0 left-0 right-0 p-4 text-white">
+                        <p className="text-2xl font-black">{face.name ? `${face.relation} ${face.name}` : face.relation}</p>
+                        <p className="text-sm text-white/80">识别成功</p>
+                    </div>
+                </div>
+                <div className="bg-white/95 rounded-2xl p-6 w-full max-w-sm shadow-xl">
+                    <div className="flex items-center gap-3 mb-4">
+                        <CheckCircle size={32} className="text-emerald-500 shrink-0" />
+                        <div>
+                            <p className="text-lg font-bold text-slate-800">张爷爷，这是您的{face.relation}{face.name ? ` ${face.name}` : ''}</p>
+                            <p className="text-slate-500 text-sm">正在为您播报...</p>
+                        </div>
+                    </div>
+                    <p className="text-slate-600 leading-relaxed">{face.description}</p>
+                </div>
+            </div>
+            <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-full bg-black/50 flex items-center justify-center text-white z-10">
+                <X size={20} />
+            </button>
+        </div>
+    );
+};
+
+// 4. Immersive Memories Scenario (时光相册 - 手动切换模式)
 const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose: () => void; onPrev: () => void; onNext: () => void }) => {
     // Loop through photos based on step
-    const photoIndex = step % MOCK_MEMORIES.length;
-    const photo = MOCK_MEMORIES[photoIndex];
+    const photoIndex = step % ALBUM_MEMORIES.length;
+    const photo = ALBUM_MEMORIES[photoIndex];
     const [isSpeaking, setIsSpeaking] = useState(false);
 
-    // 播放当前照片的语音（用户点击播放或切换时触发）
+    // 播放当前照片的语音（给爷爷回忆照片内容的讲述风格）
     const playNarration = useCallback(() => {
         setIsSpeaking(true);
-        const textToSpeak = `${photo.location}。${photo.story}`;
+        const textToSpeak = `张爷爷，让我帮您回忆一下这张照片。${photo.location}。${photo.story}`;
         VoiceService.speak(textToSpeak, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
     }, [photo]);
 
-    // 初次进入时自动播放第一张
+    // 初次进入时自动播放第一张（先停止其他语音，延迟后再播，避免重复/重叠）
     useEffect(() => {
-        playNarration();
+        VoiceService.stop();
+        const timer = setTimeout(() => playNarration(), 400);
         return () => {
+            clearTimeout(timer);
             VoiceService.stop();
         };
     }, []);
@@ -644,10 +740,10 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
         setIsSpeaking(false);
         onPrev();
         setTimeout(() => {
-            const prevIndex = (step - 1 + MOCK_MEMORIES.length) % MOCK_MEMORIES.length;
-            const prevPhoto = MOCK_MEMORIES[prevIndex];
+            const prevIndex = (step - 1 + ALBUM_MEMORIES.length) % ALBUM_MEMORIES.length;
+            const prevPhoto = ALBUM_MEMORIES[prevIndex];
             setIsSpeaking(true);
-            VoiceService.speak(`${prevPhoto.location}。${prevPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
+            VoiceService.speak(`张爷爷，让我帮您回忆一下这张照片。${prevPhoto.location}。${prevPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
     };
 
@@ -656,10 +752,10 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
         setIsSpeaking(false);
         onNext();
         setTimeout(() => {
-            const nextIndex = (step + 1) % MOCK_MEMORIES.length;
-            const nextPhoto = MOCK_MEMORIES[nextIndex];
+            const nextIndex = (step + 1) % ALBUM_MEMORIES.length;
+            const nextPhoto = ALBUM_MEMORIES[nextIndex];
             setIsSpeaking(true);
-            VoiceService.speak(`${nextPhoto.location}。${nextPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
+            VoiceService.speak(`张爷爷，让我帮您回忆一下这张照片。${nextPhoto.location}。${nextPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
     };
 
@@ -679,7 +775,7 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
             {/* Top Info */}
             <div className="relative z-10 px-6 pt-12 flex justify-between items-start">
                 <div className="bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-white/80 text-xs font-bold flex items-center gap-2">
-                    <ImageIcon size={12} /> 时光回忆录 ({photoIndex + 1}/{MOCK_MEMORIES.length})
+                    <ImageIcon size={12} /> 时光回忆录 ({photoIndex + 1}/{ALBUM_MEMORIES.length})
                 </div>
 
                 {/* Close Button */}
@@ -768,7 +864,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     const [dateStr, setDateStr] = useState<string>('');
 
     // Scenario Flow State
-    const [activeScenario, setActiveScenario] = useState<'none' | 'nav' | 'meds' | 'memory'>('none');
+    const [activeScenario, setActiveScenario] = useState<'none' | 'nav' | 'meds' | 'memory' | 'face'>('none');
     const [step, setStep] = useState(0);
     const [voiceInputDisplay, setVoiceInputDisplay] = useState<string | null>(null);
 
@@ -1317,6 +1413,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
 
             if (response.shouldTriggerAction) {
                 setTimeout(() => {
+                    VoiceService.stop();
                     switch (response.shouldTriggerAction) {
                         case 'nav':
                             const destMatch = result.text.match(/去(.+?)(?:怎么走|$)/);
@@ -1332,6 +1429,10 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                             break;
                         case 'memory':
                             setActiveScenario('memory');
+                            setStep(0);
+                            break;
+                        case 'face':
+                            setActiveScenario('face');
                             setStep(0);
                             break;
                     }
@@ -1564,6 +1665,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
 
     // 打开相册（时光回忆录）
     const openAlbum = useCallback(() => {
+        VoiceService.stop();
         setAiMessage("好的，让我们一起翻翻老照片。");
         setIsTalking(true);
         setTimeout(() => {
@@ -1663,6 +1765,16 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 {/* --- SCENARIO LAYERS --- */}
                 {activeScenario === 'nav' && <ARNavigationFlow step={step} routeData={routeData} destination={navDestination} />}
                 {activeScenario === 'meds' && <MedicationFlow step={step} />}
+                {activeScenario === 'face' && (
+                    <FaceRecognitionFlow
+                        step={Math.min(step, 3)}
+                        onClose={() => {
+                            VoiceService.stop();
+                            setActiveScenario('none');
+                            setStep(0);
+                        }}
+                    />
+                )}
                 {activeScenario === 'memory' && (
                     <MemoriesFlow
                         step={step}
