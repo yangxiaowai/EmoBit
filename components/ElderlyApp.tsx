@@ -766,7 +766,7 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
                 <img
                     key={photo.id}
                     src={photo.url}
-                    className="w-full h-full object-cover animate-ken-burns opacity-90"
+                    className="w-full h-full object-cover"
                     alt="Memory"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40"></div>
