@@ -9,7 +9,6 @@ import { mapService, RouteResult, RouteStep } from '../services/mapService';
 import { memoryService, LocationEvent, MemoryAnchor } from '../services/memoryService';
 import { VoiceService } from '../services/api';
 import { voiceSelectionService } from '../services/voiceSelectionService';
-import { voiceCloneService } from '../services/voiceCloneService';
 import { aiService, AIResponse } from '../services/aiService';
 import { wanderingService } from '../services/wanderingService';
 import { medicationService } from '../services/medicationService';
@@ -750,61 +749,37 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         // EdgeTTS 已移除，不再预加载
     }, []);
 
-    // 克隆常用句预拉：等待服务端模型就绪后再触发（避免过早请求导致错误）
-    // 服务端会在模型加载完成后自动预加载，这里只做补充（如果前端有新的常用句）
+    // 进入老人端：预拉常用句 + 延迟一次打招呼（仅播一次，避免 React Strict Mode 双挂载导致重复）
     useEffect(() => {
-        const preloadWhenReady = async () => {
+        let cancelled = false;
+        let greetingTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+        const initTTSAndGreeting = async () => {
             try {
-                // 等待服务就绪（最多等待 5 秒）
-                const maxWait = 5000;
-                const start = Date.now();
-                let status = await voiceCloneService.checkStatus();
-
-                while (!status.modelReady && Date.now() - start < maxWait) {
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    status = await voiceCloneService.checkStatus();
-                }
-
-                if (status.modelReady) {
-                    const id = voiceSelectionService.getSelectedVoiceId();
-                    if (id?.startsWith('cloned_')) {
-                        console.log('[ElderlyApp] 服务已就绪，补充预加载克隆常用句（服务端已自动预加载）');
-                        // 服务端已自动预加载，这里只做补充（如果有新的常用句）
-                        // VoiceService.preloadClonePhrases(id);
-
-                        // 可选：进入老人端时自动播放问候语（如果已选中克隆音色）
-                        // 延迟 1 秒，确保服务完全就绪
-                        setTimeout(() => {
-                            const greeting = '张爷爷，我是您的数字人助手。今天身体怎么样？';
-                            setAiMessage(greeting);
-                            // 只有在没有正在播放的情况下才播放问候语 (避免冲突)
-                            if (!isTalking) {
-                                VoiceService.speak(greeting, id, undefined, undefined).catch(() => { });
-                            }
-                        }, 1000);
-                    }
+                const available = await VoiceService.checkAvailability();
+                if (cancelled) return;
+                if (available) {
+                    console.log('[ElderlyApp] Edge TTS 可用，预加载常用句');
+                    VoiceService.preloadClonePhrases();
+                    const greeting = '张爷爷，我是您的数字人助手。今天身体怎么样？';
+                    setAiMessage(greeting);
+                    greetingTimeoutId = setTimeout(() => {
+                        if (cancelled) return;
+                        VoiceService.speak(greeting, undefined, undefined, undefined).catch(() => { });
+                    }, 1000);
                 } else {
-                    console.warn('[ElderlyApp] 服务未就绪，跳过预加载（服务端会自动预加载）');
+                    console.warn('[ElderlyApp] TTS 服务不可用，请确保 edge_tts_server 已启动');
                 }
             } catch (e) {
-                console.error('[ElderlyApp] Voice status check failed:', e);
+                if (!cancelled) console.error('[ElderlyApp] TTS 初始化失败:', e);
             }
         };
+        initTTSAndGreeting();
 
-        // 如果不是克隆音色，也要打个招呼 (普通模式)
-        // Check if we need a default greeting if not using clone
-        const id = voiceSelectionService.getSelectedVoiceId();
-        if (!id?.startsWith('cloned_')) {
-            setTimeout(() => {
-                const greeting = '张爷爷，您好！我是小智，今天需要什么帮助吗？';
-                setAiMessage(greeting);
-                if (!isTalking) {
-                    VoiceService.speak(greeting, undefined, undefined, undefined).catch(() => { });
-                }
-            }, 1000);
-        }
-
-        preloadWhenReady();
+        return () => {
+            cancelled = true;
+            if (greetingTimeoutId) clearTimeout(greetingTimeoutId);
+        };
     }, []);
 
     // Clock
@@ -1177,12 +1152,12 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
             console.log('[ElderlyApp] 开始播放 AI 回复:', response.text);
             console.log('[ElderlyApp] 检查语音服务状态...');
 
-            // 检查语音克隆服务
-            const voiceCloneAvailable = await voiceCloneService.checkConnection();
-            console.log('[ElderlyApp] 语音克隆服务状态:', voiceCloneAvailable ? '✅ 可用' : '❌ 不可用');
+            // 检查语音服务（Edge TTS）
+            const ttsAvailable = await VoiceService.checkAvailability();
+            console.log('[ElderlyApp] 语音服务状态:', ttsAvailable ? '✅ 可用' : '❌ 不可用');
 
-            if (!voiceCloneAvailable) {
-                console.warn('[ElderlyApp] ⚠️ 语音克隆服务不可用，无法播放语音');
+            if (!ttsAvailable) {
+                console.warn('[ElderlyApp] ⚠️ 语音服务不可用，请确保 edge_tts_server 已启动');
             }
 
             // 播放语音

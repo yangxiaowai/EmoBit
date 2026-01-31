@@ -9,7 +9,10 @@ export interface TTSResult {
     error?: string;
 }
 
-export type VoiceType = 'xiaoxiao' | 'yunxi' | 'xiaoyi' | 'yunyang';
+export type VoiceType = 'xiaoxiao' | 'yunxi' | 'xiaoyi' | 'yunyang' | 'xiaoxuan' | 'yunxia' | 'yunjian';
+
+/** 默认孙女声（晓伊，年轻女声/女童声，适合数字人孙女角色） */
+export const DEFAULT_GRANDDAUGHTER_VOICE: VoiceType = 'xiaoyi';
 
 class EdgeTTSService {
     private wsUrl: string;
@@ -19,22 +22,27 @@ class EdgeTTSService {
         reject: (error: Error) => void;
     }> = new Map();
     private requestId = 0;
-    /** 预生成缓存：text -> audioUrl，用于零延迟开场/常用句 */
+    /** 预生成缓存：voice:text -> audioUrl，不同音色分开缓存 */
     private preloadCache = new Map<string, string>();
+
+    private cacheKey(voice: VoiceType, text: string): string {
+        return `${voice}:${text}`;
+    }
 
     constructor() {
         this.wsUrl = import.meta.env.VITE_EDGE_TTS_WS_URL || 'ws://localhost:10096';
     }
 
     /**
-     * 预生成常用句并缓存，后续 synthesize 命中即返
+     * 预生成常用句并缓存，后续 synthesize 命中即返（按音色+文本缓存）
      */
-    async preload(texts: string[], voice: VoiceType = 'xiaoxiao'): Promise<void> {
+    async preload(texts: string[], voice: VoiceType = DEFAULT_GRANDDAUGHTER_VOICE): Promise<void> {
         await Promise.all(
             texts.map(async (text) => {
-                if (this.preloadCache.has(text)) return;
+                const key = this.cacheKey(voice, text);
+                if (this.preloadCache.has(key)) return;
                 const r = await this.synthesize(text, voice);
-                if (r.success && r.audioUrl) this.preloadCache.set(text, r.audioUrl);
+                if (r.success && r.audioUrl) this.preloadCache.set(key, r.audioUrl);
             })
         );
     }
@@ -67,8 +75,9 @@ class EdgeTTSService {
      * @param voice 声音类型
      * @returns 音频URL (blob URL)
      */
-    async synthesize(text: string, voice: VoiceType = 'xiaoxiao'): Promise<TTSResult> {
-        const cached = this.preloadCache.get(text);
+    async synthesize(text: string, voice: VoiceType = DEFAULT_GRANDDAUGHTER_VOICE): Promise<TTSResult> {
+        const key = this.cacheKey(voice, text);
+        const cached = this.preloadCache.get(key);
         if (cached) return { success: true, audioUrl: cached };
 
         return new Promise((resolve, reject) => {
@@ -86,9 +95,10 @@ class EdgeTTSService {
                         if (data.error) {
                             resolve({ success: false, error: data.error });
                         } else if (data.success && data.audio) {
-                            // 将Base64转换为Blob URL
+                            // 将Base64转换为Blob URL，并按音色+文本缓存
                             const audioBlob = this.base64ToBlob(data.audio, 'audio/mpeg');
                             const audioUrl = URL.createObjectURL(audioBlob);
+                            this.preloadCache.set(key, audioUrl);
                             resolve({ success: true, audioUrl });
                         }
                     } catch (e) {
@@ -119,7 +129,7 @@ class EdgeTTSService {
     /**
      * 直接播放语音
      */
-    async speak(text: string, voice: VoiceType = 'xiaoxiao', onEnded?: () => void): Promise<void> {
+    async speak(text: string, voice: VoiceType = DEFAULT_GRANDDAUGHTER_VOICE, onEnded?: () => void): Promise<void> {
         // Stop any currently playing audio
         this.stop();
 

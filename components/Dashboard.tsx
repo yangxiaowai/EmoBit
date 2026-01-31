@@ -935,8 +935,8 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
         const recordingSecondsRef = useRef(0);
 
-        // 已存储的克隆音色列表 & 当前选中
-        const [clonedVoices, setClonedVoices] = useState<{ id: string; name: string }[]>([]);
+        // 所有音色（Edge 预设 + 克隆）& 当前选中
+        const [allVoices, setAllVoices] = useState<{ id: string; name: string; isCloned?: boolean }[]>([]);
         const [selectedVoiceId, setSelectedVoiceId] = useState<string | null>(() =>
             voiceSelectionService.getSelectedVoiceId()
         );
@@ -946,11 +946,10 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
         const [avatarProgress, setAvatarProgress] = useState(0);
         const [generatedAvatarUrl, setGeneratedAvatarUrl] = useState<string | null>(null);
 
-        // 加载已存储克隆音色 & 订阅选中变化
+        // 加载所有音色（Edge 预设 + 克隆）& 订阅选中变化
         const loadVoices = async () => {
             const all = await VoiceService.getAllVoices();
-            const cloned = all.filter((v) => v.isCloned).map((v) => ({ id: v.id, name: v.name }));
-            setClonedVoices(cloned);
+            setAllVoices(all.map((v) => ({ id: v.id, name: v.name, isCloned: v.isCloned })));
         };
 
         useEffect(() => {
@@ -1051,13 +1050,11 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
             event.target.value = '';
         };
 
-        /** 设为当前使用。传 null 表示改用预设语音。 */
+        /** 设为当前使用。传 null 表示使用默认孙女声（晓伊）。 */
         const handleSetAsCurrent = (id: string | null) => {
             voiceSelectionService.setSelectedVoiceId(id);
             setSelectedVoiceId(id);
-            if (id?.startsWith('cloned_')) {
-                VoiceService.preloadClonePhrases(id);
-            }
+            VoiceService.preloadClonePhrases(id ?? undefined);
         };
 
         // 开始语音克隆
@@ -1326,39 +1323,20 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
 
                         <div className="mt-4 pt-4 border-t border-white/20">
                             <h4 className="text-xs font-bold text-indigo-100 uppercase tracking-wider mb-2">
-                                已存储的克隆音色 · 可切换使用
+                                TTS 音色 · 可切换（Edge 预设 + 克隆）
                             </h4>
-                            <div className="space-y-2 max-h-40 overflow-y-auto">
-                                <div className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2">
-                                    <span className="text-sm text-white truncate flex-1">
-                                        预设语音（小小）
-                                        {!selectedVoiceId && (
-                                            <span className="ml-1 text-[10px] text-emerald-300">当前使用</span>
-                                        )}
-                                    </span>
-                                    <div className="flex gap-1 shrink-0">
-                                        <button
-                                            onClick={() => VoiceService.speak('你好，我是你的数字人助手')}
-                                            className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
-                                        >
-                                            试听
-                                        </button>
-                                        <button
-                                            onClick={() => handleSetAsCurrent(null)}
-                                            className="px-2 py-1 bg-white/20 text-white text-[10px] rounded hover:bg-white/30"
-                                        >
-                                            设为当前
-                                        </button>
-                                    </div>
-                                </div>
-                                {clonedVoices.map((v) => (
+                            <div className="space-y-2 max-h-48 overflow-y-auto">
+                                {allVoices.map((v) => (
                                     <div
                                         key={v.id}
                                         className="flex items-center justify-between gap-2 bg-white/10 rounded-lg px-3 py-2"
                                     >
                                         <span className="text-sm text-white truncate flex-1">
                                             {v.name}
-                                            {selectedVoiceId === v.id && (
+                                            {v.isCloned && (
+                                                <span className="ml-1 text-[10px] text-amber-300">克隆</span>
+                                            )}
+                                            {(selectedVoiceId === v.id || (!selectedVoiceId && v.id === 'edge_xiaoyi')) && (
                                                 <span className="ml-1 text-[10px] text-emerald-300">当前使用</span>
                                             )}
                                         </span>

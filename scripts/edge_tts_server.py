@@ -1,16 +1,20 @@
 """
 Edge TTS 语音合成服务端
-使用微软Edge TTS - 完全免费，无需API密钥
+使用微软 Edge TTS - 完全免费，无需 API 密钥
 
 使用方法:
 1. 安装依赖: pip install edge-tts websockets
 2. 运行: python edge_tts_server.py
-3. WebSocket端点: ws://localhost:10096
+3. WebSocket 端点: ws://localhost:10096
 
-支持的中文声音:
-- zh-CN-XiaoxiaoNeural (女声，默认)
-- zh-CN-YunxiNeural (男声)
-- zh-CN-XiaoyiNeural (女童声)
+支持的中文声音（可从前端切换）:
+- xiaoyi  晓伊（女童声/年轻女声，默认，适合孙女）
+- xiaoxiao 晓晓（女声）
+- xiaoxuan 晓萱（女声）
+- yunxia  云夏（女声）
+- yunxi   云希（男声）
+- yunjian 云健（男声）
+- yunyang 云扬（男声，新闻风格）
 """
 
 import asyncio
@@ -35,16 +39,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 默认声音配置
-DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"  # 中文女声
+# 默认声音：晓伊（女童声/年轻女声，适合孙女角色）
+DEFAULT_VOICE = "zh-CN-XiaoyiNeural"
 
-# 可用声音列表
+# 可用声音列表（与前端 VoiceType 一致）
 AVAILABLE_VOICES = {
-    "xiaoxiao": "zh-CN-XiaoxiaoNeural",    # 女声
-    "yunxi": "zh-CN-YunxiNeural",          # 男声
-    "xiaoyi": "zh-CN-XiaoyiNeural",        # 女童声
-    "yunyang": "zh-CN-YunyangNeural",      # 新闻男声
-    "xiaoxuan": "zh-CN-XiaoxuanNeural",    # 女声
+    "xiaoyi": "zh-CN-XiaoyiNeural",        # 晓伊，女童声/孙女声（默认）
+    "xiaoxiao": "zh-CN-XiaoxiaoNeural",     # 晓晓，女声
+    "xiaoxuan": "zh-CN-XiaoxuanNeural",     # 晓萱，女声
+    "yunxia": "zh-CN-YunxiaNeural",         # 云夏，女声
+    "yunxi": "zh-CN-YunxiNeural",           # 云希，男声
+    "yunjian": "zh-CN-YunjianNeural",       # 云健，男声
+    "yunyang": "zh-CN-YunyangNeural",       # 云扬，新闻男声
 }
 
 async def text_to_speech(text: str, voice: str = DEFAULT_VOICE) -> bytes:
@@ -68,7 +74,7 @@ async def handle_client(websocket, path=None):
             try:
                 data = json.loads(message)
                 text = data.get("text", "")
-                voice_key = data.get("voice", "xiaoxiao")
+                voice_key = data.get("voice", "xiaoyi")
                 voice = AVAILABLE_VOICES.get(voice_key, DEFAULT_VOICE)
                 
                 if not text:
