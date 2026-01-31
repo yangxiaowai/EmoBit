@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import * as THREE from 'three';
 import { SimulationType, SystemStatus, MemoryPhoto } from '../types';
-import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as ImageIcon, Volume2, X, CloudSun, Loader2, Navigation, ScanLine, Pill, CheckCircle, ArrowUp, ArrowLeft, ArrowRight, MapPin, Camera, User, ScanFace, Box, AlertCircle, MicOff, Sparkles, Settings, Brain } from 'lucide-react';
+import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as ImageIcon, Images, Volume2, X, CloudSun, Loader2, Navigation, ScanLine, Pill, CheckCircle, ArrowUp, ArrowLeft, ArrowRight, MapPin, Camera, User, ScanFace, Box, AlertCircle, MicOff, Sparkles, Settings, Keyboard, Send } from 'lucide-react';
 import { speechService, SpeechRecognitionResult } from '../services/speechService';
 import { mapService, RouteResult, RouteStep } from '../services/mapService';
 import { memoryService, LocationEvent } from '../services/memoryService';
@@ -796,6 +796,10 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     // 认知报告状态
     const [showCognitiveReport, setShowCognitiveReport] = useState(false);
 
+    // 输入模式：voice=长按说话, keyboard=键盘输入
+    const [useKeyboardInput, setUseKeyboardInput] = useState(false);
+    const [textInputValue, setTextInputValue] = useState('');
+
     // Auto-scroll ref
     const messagesEndRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -1017,6 +1021,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     const lastRecognitionResultRef = useRef<SpeechRecognitionResult | null>(null);
     const finalResultTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const isProcessingRef = useRef<boolean>(false); // 防止重复处理
+    const holdRecordingRef = useRef<boolean>(false); // 长按说话：是否由按住手势触发的录音
 
     // 整合识别结果：智能合并所有中间结果，选择最完整、最准确的句子
     const consolidateResults = useCallback((results: string[]): string => {
@@ -1419,6 +1424,55 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         }
     }, [isRecording, handleSpeechResult]);
 
+    // 长按说话：按住开始录音，松开停止
+    const handleHoldStart = useCallback(() => {
+        holdRecordingRef.current = true;
+        if (!isRecording) toggleRecording();
+    }, [isRecording, toggleRecording]);
+
+    const handleHoldEnd = useCallback(() => {
+        if (!holdRecordingRef.current) return;
+        holdRecordingRef.current = false;
+
+        console.log('[ElderlyApp] 长按松开，停止录音');
+        if (finalResultTimeoutRef.current) {
+            clearTimeout(finalResultTimeoutRef.current);
+            finalResultTimeoutRef.current = null;
+        }
+        setIsRecording(false);
+        setIsListening(false);
+        speechService.stopRecognition();
+        setTimeout(() => {
+            if (isProcessingRef.current) return;
+            if (interimResultsRef.current.length > 0) {
+                const consolidatedText = consolidateResults(interimResultsRef.current);
+                if (consolidatedText) {
+                    processFinalResult({ text: consolidatedText, isFinal: true, confidence: undefined });
+                }
+            } else if (!lastRecognitionResultRef.current) {
+                console.log('[ElderlyApp] 没有识别结果');
+            }
+        }, 10000);
+    }, [consolidateResults, processFinalResult]);
+
+    // 键盘输入提交
+    const handleTextSubmit = useCallback(() => {
+        const text = textInputValue.trim();
+        if (!text) return;
+        setTextInputValue('');
+        processFinalResult({ text, isFinal: true, confidence: undefined });
+    }, [textInputValue, processFinalResult]);
+
+    // 打开相册（时光回忆录）
+    const openAlbum = useCallback(() => {
+        setAiMessage("好的，让我们一起翻翻老照片。");
+        setIsTalking(true);
+        setTimeout(() => {
+            setIsTalking(false);
+            setActiveScenario('memory');
+        }, 800);
+    }, []);
+
     // Helper to trigger voice command flow (used by both real recognition and simulation)
     const triggerVoiceCommand = useCallback((userText: string, targetScenario: 'nav' | 'meds' | 'memory', aiResponse: string) => {
         // 1. Reset
@@ -1529,86 +1583,79 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                         )}
                     </div>
 
-                    {/* 紧凑对话条：AI 陪伴助手 + 创建头像，位于导航栏上方 */}
-                    <div className="shrink-0 px-4 pb-2 relative z-10">
-                        <div className="bg-white/80 backdrop-blur-xl py-3 px-4 rounded-2xl shadow-sm border border-white/50 flex items-center gap-3 min-h-[56px]">
-                            <div className="flex items-center gap-2 text-indigo-600 text-xs font-bold uppercase tracking-wider flex-shrink-0">
-                                {isListening && <Mic size={12} className="animate-pulse" />}
-                                {isThinking && <Loader2 size={12} className="animate-spin" />}
-                                {!isListening && !isThinking && <Volume2 size={12} />}
-                                {isListening ? "正在聆听..." : isThinking ? "思考中..." : "AI 陪伴助手"}
-                            </div>
-                            <div className="flex-1 min-w-0 overflow-hidden">
+                    {/* AI 消息展示区域（紧凑） */}
+                    {(voiceInputDisplay || aiMessage) && (
+                        <div className="shrink-0 px-4 pb-1 relative z-10 min-h-0">
+                            <div className="bg-white/60 backdrop-blur-sm py-2 px-3 rounded-xl text-center">
                                 {voiceInputDisplay ? (
                                     <p className="text-slate-800 text-sm font-bold truncate">"{voiceInputDisplay}"</p>
                                 ) : (
-                                    <p className="text-slate-700 text-sm font-medium truncate">{aiMessage}</p>
+                                    <p className="text-slate-600 text-sm font-medium truncate">{aiMessage}</p>
                                 )}
                                 <div ref={messagesEndRef} />
                             </div>
+                        </div>
+                    )}
+                    {/* 输入框：左侧键盘 | 中间语音/文字 | 右侧相册 — 固定在底部 */}
+                    <div className="shrink-0 px-3 pb-6 pt-2 relative z-10">
+                        <div
+                            className="bg-[#F7F7F7] rounded-[2rem] min-h-[68px] flex items-center justify-between px-4 py-4 shadow-[0_2px_8px_rgba(0,0,0,0.06)] select-none"
+                            style={{ boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}
+                        >
+                            {/* 左侧：键盘输入（点击切换键盘/语音模式） */}
                             <button
-                                onClick={() => setShowAvatarCreator(true)}
-                                className="w-8 h-8 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-full shadow flex items-center justify-center text-white hover:scale-110 transition-transform flex-shrink-0"
-                                title="创建我的数字分身"
+                                type="button"
+                                onClick={() => setUseKeyboardInput(prev => !prev)}
+                                className={`w-12 h-12 rounded-full border-2 flex items-center justify-center flex-shrink-0 transition-colors ${useKeyboardInput ? 'border-indigo-500 bg-indigo-50 text-indigo-600' : 'border-slate-400/60 text-slate-600 hover:bg-slate-100'}`}
+                                title={useKeyboardInput ? '切换为语音输入' : '使用键盘输入'}
                             >
-                                <Sparkles size={14} />
+                                <Keyboard size={24} strokeWidth={2} />
+                            </button>
+                            {/* 中央：键盘模式=文字输入框，语音模式=长按说话 */}
+                            {useKeyboardInput ? (
+                                <div className="flex-1 flex items-center gap-2 min-w-0 mx-3">
+                                    <input
+                                        type="text"
+                                        value={textInputValue}
+                                        onChange={(e) => setTextInputValue(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleTextSubmit(); }}
+                                        placeholder="输入文字发送..."
+                                        className="flex-1 min-w-0 h-12 px-4 rounded-2xl bg-white border border-slate-200 text-base text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                                        autoFocus
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleTextSubmit}
+                                        disabled={!textInputValue.trim()}
+                                        className="w-12 h-12 rounded-full bg-indigo-500 flex items-center justify-center text-white flex-shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        <Send size={20} strokeWidth={2} />
+                                    </button>
+                                </div>
+                            ) : (
+                                <div
+                                    className="flex-1 flex items-center justify-center min-h-[48px] min-w-0 mx-3 cursor-pointer active:opacity-80 transition-opacity"
+                                    onPointerDown={handleHoldStart}
+                                    onPointerUp={handleHoldEnd}
+                                    onPointerLeave={handleHoldEnd}
+                                    onContextMenu={(e) => e.preventDefault()}
+                                >
+                                    <span className="text-slate-600 font-medium text-lg">
+                                        {isListening ? '正在聆听...' : isThinking ? '思考中...' : '长按说话'}
+                                    </span>
+                                </div>
+                            )}
+                            {/* 右侧：相册（时光回忆录） */}
+                            <button
+                                type="button"
+                                onClick={openAlbum}
+                                className="w-12 h-12 rounded-full border-2 border-slate-400/60 flex items-center justify-center flex-shrink-0 text-slate-600 hover:bg-slate-100 transition-colors"
+                                title="打开相册"
+                            >
+                                <Images size={26} strokeWidth={2} />
                             </button>
                         </div>
                     </div>
-
-                    {/* 导航栏：相册 / 麦克风 / 服药 — 固定在屏幕底部 */}
-                    {activeScenario === 'none' && (
-                        <div className="absolute bottom-0 left-0 right-0 pt-3 pb-6 px-4 bg-gradient-to-t from-white/30 to-transparent z-40">
-                            <div className="h-20 bg-white/20 backdrop-blur-2xl rounded-3xl border border-white/20 flex items-center justify-around px-2 shadow-lg">
-
-                                <button
-                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
-                                    onClick={() => {
-                                        setAiMessage("好的，让我们一起翻翻老照片。");
-                                        setIsTalking(true);
-                                        setTimeout(() => {
-                                            setIsTalking(false);
-                                            setActiveScenario('memory');
-                                        }, 800);
-                                    }}
-                                >
-                                    <div className="w-10 h-10 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-indigo-500/50 transition-all">
-                                        <ImageIcon size={20} className="text-white" />
-                                    </div>
-                                    <span className="text-[10px] font-medium opacity-80">相册</span>
-                                </button>
-
-                                <div className="flex items-center justify-center">
-                                    <button
-                                        onClick={toggleRecording}
-                                        className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center text-white border-4 border-slate-900 transition-all duration-300 ${isRecording
-                                            ? 'bg-gradient-to-br from-red-500 to-rose-600 scale-110 animate-pulse'
-                                            : 'bg-gradient-to-br from-indigo-600 to-violet-600'
-                                            }`}
-                                    >
-                                        {isRecording ? (
-                                            <div className="flex gap-1">
-                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce"></div>
-                                                <div className="w-1 h-5 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce" style={{ animationDelay: '75ms' }}></div>
-                                            </div>
-                                        ) : <Mic size={28} />}
-                                    </button>
-                                </div>
-
-                                <button
-                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
-                                    onClick={() => medicationService.simulateReminder()}
-                                >
-                                    <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-emerald-500/50 transition-all">
-                                        <Pill size={20} className="text-white" />
-                                    </div>
-                                    <span className="text-[10px] font-medium opacity-80">服药</span>
-                                </button>
-
-                            </div>
-                        </div>
-                    )}
 
                 </div> {/* Close HomeScreen */}
 
@@ -1667,17 +1714,6 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                     isOpen={showCognitiveReport}
                     onClose={() => setShowCognitiveReport(false)}
                 />
-
-                {/* 认知报告入口按钮 - 右上角 */}
-                {activeScenario === 'none' && (
-                    <button
-                        onClick={() => setShowCognitiveReport(true)}
-                        className="absolute top-16 right-6 w-10 h-10 bg-purple-500/20 backdrop-blur-sm rounded-full flex items-center justify-center z-20 hover:bg-purple-500/30 transition-colors"
-                        title="查看认知报告"
-                    >
-                        <Brain size={20} className="text-purple-600" />
-                    </button>
-                )}
 
             </div>
 

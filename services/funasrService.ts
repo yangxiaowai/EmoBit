@@ -29,7 +29,6 @@ export class FunASRService {
     private waitingForFinal = false; // 是否正在等待最终结果
     private lastResult: FunASRResult | null = null; // 保存最后一个结果（可能是中间结果）
     private finalResultTimeout: NodeJS.Timeout | null = null; // 等待最终结果的超时定时器
-    private finalResultTimeout: NodeJS.Timeout | null = null; // 等待最终结果的超时定时器
 
     constructor(serverUrl?: string) {
         // 从环境变量或参数获取服务器地址
