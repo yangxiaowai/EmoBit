@@ -10,7 +10,9 @@ import { VoiceService } from '../services/api';
 import { voiceSelectionService } from '../services/voiceSelectionService';
 import { aiService, AIResponse } from '../services/aiService';
 import { wanderingService } from '../services/wanderingService';
+import { homeArrivalService } from '../services/homeArrivalService';
 import { medicationService } from '../services/medicationService';
+import { faceService, FaceData } from '../services/faceService';
 import { cognitiveService } from '../services/cognitiveService';
 import AvatarCreator from './AvatarCreator';
 import ARNavigationOverlay from './ARNavigationOverlay';
@@ -800,6 +802,10 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     const [useKeyboardInput, setUseKeyboardInput] = useState(false);
     const [textInputValue, setTextInputValue] = useState('');
 
+    // 人脸识别状态 (Face Album Feature)
+    const [showFaceRecognition, setShowFaceRecognition] = useState(false);
+    const [recognizedFace, setRecognizedFace] = useState<FaceData | null>(null);
+
     // Auto-scroll ref
     const messagesEndRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
@@ -814,6 +820,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     }, []);
 
     // 进入老人端：预拉常用句 + 延迟一次打招呼（仅播一次，避免 React Strict Mode 双挂载导致重复）
+    // 同时检测是否到家，如果到家则询问是否打开时光相册
     useEffect(() => {
         let cancelled = false;
         let greetingTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -825,7 +832,21 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 if (available) {
                     console.log('[ElderlyApp] Edge TTS 可用，预加载常用句');
                     VoiceService.preloadClonePhrases();
-                    const greeting = '张爷爷，我是您的数字人助手。今天身体怎么样？';
+
+                    // 检测是否到家且本次会话未询问过
+                    const isAtHome = homeArrivalService.isAtHome();
+                    const alreadyPrompted = homeArrivalService.hasPromptedThisSession();
+
+                    let greeting: string;
+                    if (isAtHome && !alreadyPrompted) {
+                        // 到家了，询问是否打开时光相册
+                        greeting = '张爷爷，您到家了呢！要不要看看时光相册，回忆一下美好时光？';
+                        homeArrivalService.markPrompted();
+                        console.log('[ElderlyApp] 检测到家，询问是否打开时光相册');
+                    } else {
+                        greeting = '张爷爷，我是您的数字人助手。今天身体怎么样？';
+                    }
+
                     setAiMessage(greeting);
                     greetingTimeoutId = setTimeout(() => {
                         if (cancelled) return;
@@ -933,8 +954,17 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
             return { intent: 'meds' };
         }
 
+        // 肯定回复意图（用于到家询问时光相册的回复）
+        // 如 "好"、"要"、"打开"、"可以"、"行" 等
+        const affirmativeKeywords = ['好', '要', '打开', '可以', '行', '看看', '好的', '嗯', '是', '对'];
+        if (affirmativeKeywords.some(k => lowerText.includes(k)) && lowerText.length <= 10) {
+            // 短促的肯定回复视为同意打开相册
+            console.log('[ElderlyApp] 检测到肯定回复，打开时光相册');
+            return { intent: 'memory' };
+        }
+
         // 回忆意图
-        const memoryKeywords = ['照片', '回忆', '以前', '老照片', '看看'];
+        const memoryKeywords = ['照片', '回忆', '以前', '老照片'];
         if (memoryKeywords.some(k => lowerText.includes(k))) {
             return { intent: 'memory' };
         }
@@ -1149,6 +1179,75 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
             console.log('[ElderlyApp] ============================================================');
             console.log('[ElderlyApp] 调用 AI 服务，输入:', result.text);
             console.log('[ElderlyApp] ============================================================');
+
+            // --- Voice Command Interception for Face Recognition ---
+            if (result.text.includes('人脸') || result.text.includes('认人') || result.text.includes('是谁') || result.text.includes('照片')) {
+                console.log('[ElderlyApp] 🛡️ 拦截到人脸识别指令');
+                const allFaces = faceService.getFaces();
+                const reply = "好的，正在为您开启人脸识别。请将摄像头对准面前的人。";
+
+                setAiMessage(reply);
+                setIsThinking(false);
+                setIsTalking(true);
+
+                VoiceService.speakSegments(reply, undefined, undefined, () => {
+                    setIsTalking(false);
+                    setShowFaceRecognition(true);
+                    setRecognizedFace(null);
+
+                    // Simulate recognition after 3 seconds if faces exist
+                    if (allFaces.length > 0) {
+                        setTimeout(() => {
+                            // Randomly pick one for simulation
+                            const randomFace = allFaces[Math.floor(Math.random() * allFaces.length)];
+                            setRecognizedFace(randomFace);
+                            VoiceService.speakSegments(`这是您的${randomFace.relation}，${randomFace.name}。`);
+                        }, 3000);
+                    } else {
+                        setTimeout(() => {
+                            VoiceService.speakSegments("相册中暂无照片，请让家属先要在后台添加照片哦。");
+                        }, 2000);
+                    }
+                });
+                setVoiceInputDisplay(null);
+                isProcessingRef.current = false;
+                return;
+            }
+            // -----------------------------------------------------
+
+            // --- Voice Command Interception for Face Recognition ---
+            if (result.text.includes('人脸') || result.text.includes('认人') || result.text.includes('是谁')) {
+                console.log('[ElderlyApp] 🛡️ 拦截到人脸识别指令');
+                const allFaces = faceService.getFaces();
+                const reply = "好的，正在为您开启人脸识别。请将摄像头对准面前的人。";
+
+                setAiMessage(reply);
+                setIsThinking(false);
+                setIsTalking(true);
+
+                VoiceService.speakSegments(reply, undefined, undefined, () => {
+                    setIsTalking(false);
+                    setShowFaceRecognition(true);
+
+                    // Simulate recognition after 3 seconds if faces exist
+                    if (allFaces.length > 0) {
+                        setTimeout(() => {
+                            // Randomly pick one for simulation
+                            const randomFace = allFaces[Math.floor(Math.random() * allFaces.length)];
+                            setRecognizedFace(randomFace);
+                            VoiceService.speakSegments(`这是您的${randomFace.relation}，${randomFace.name}。`);
+                        }, 3000);
+                    } else {
+                        setTimeout(() => {
+                            VoiceService.speakSegments("相册中暂无照片，请让家属先要在后台添加照片哦。");
+                        }, 2000);
+                    }
+                });
+                setVoiceInputDisplay(null);
+                isProcessingRef.current = false;
+                return;
+            }
+            // -----------------------------------------------------
 
             // 检查 AI 服务是否配置
             if (!aiService.isConfigured()) {
@@ -1523,6 +1622,43 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                     <span>{time}</span>
                     <div className="flex items-center gap-1.5"><Signal size={12} /><Wifi size={12} /><Battery size={14} /></div>
                 </div>
+
+                {/* Face Recognition Overlay */}
+                {showFaceRecognition && (
+                    <div className="absolute inset-0 z-[100] bg-black flex flex-col items-center justify-center font-sans select-none animate-fade-in">
+                        <div className="absolute top-6 right-6 z-10 pointer-events-auto">
+                            <button onClick={() => { setShowFaceRecognition(false); setRecognizedFace(null); }} className="bg-white/20 p-3 rounded-full text-white backdrop-blur-md hover:bg-white/30 transition-colors">
+                                <X size={24} />
+                            </button>
+                        </div>
+
+                        <div className="w-full px-6 text-center mt-[-40px]">
+                            <h2 className="text-2xl text-white/90 font-bold mb-8 animate-pulse">正在识别面前的人...</h2>
+
+                            <div className="relative aspect-[3/4] w-full max-w-[280px] mx-auto bg-slate-800 rounded-3xl overflow-hidden border-4 border-indigo-500 shadow-[0_0_50px_rgba(99,102,241,0.5)]">
+                                {/* Simulated Camera Feed */}
+                                <div className="absolute inset-0 flex items-center justify-center bg-slate-900">
+                                    {!recognizedFace && <Camera size={48} className="text-slate-600 opacity-50" />}
+                                    {recognizedFace && <img src={recognizedFace.imageUrl} className="w-full h-full object-cover animate-fade-in" />}
+                                </div>
+
+                                {/* Scanning Effect */}
+                                {!recognizedFace && (
+                                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-indigo-500/20 to-transparent w-full h-full animate-[scan_2s_ease-in-out_infinite]" />
+                                )}
+
+                                {recognizedFace && (
+                                    <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-4 text-white animate-slide-up">
+                                        <h3 className="text-2xl font-bold mb-1">{recognizedFace.name}</h3>
+                                        <p className="text-lg text-indigo-300 font-bold">{recognizedFace.relation}</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {!recognizedFace && <p className="text-slate-400 mt-6 text-sm">请将摄像头对准面部</p>}
+                        </div>
+                    </div>
+                )}
 
                 {/* --- SCENARIO LAYERS --- */}
                 {activeScenario === 'nav' && <ARNavigationFlow step={step} routeData={routeData} destination={navDestination} />}

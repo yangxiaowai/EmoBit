@@ -112,11 +112,11 @@ class EdgeTTSService {
                     resolve({ success: false, error: 'TTS服务连接失败，请确保edge_tts_server.py已启动' });
                 };
 
-                // 10秒超时
+                // 30秒超时（第一次调用Edge TTS可能较慢）
                 setTimeout(() => {
                     ws.close();
                     resolve({ success: false, error: '请求超时' });
-                }, 10000);
+                }, 30000);
 
             } catch (error) {
                 resolve({ success: false, error: '无法连接TTS服务' });

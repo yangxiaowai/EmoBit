@@ -37,6 +37,8 @@ export const USE_MOCK_API = false;
 /** Edge TTS 常用句预拉，命中缓存可近即时播放 */
 const COMMON_TTS_PHRASES = [
   '你好，我是你的数字人助手',
+  '张爷爷，我是您的数字人助手。今天身体怎么样？',
+  '张爷爷，您到家了呢！要不要看看时光相册，回忆一下美好时光？',
   '今天天气不错，24度晴朗。出门记得戴帽子防晒哦~',
   '好的，我来帮您导航。',
   '好的，我来帮您看看药。',
@@ -230,7 +232,7 @@ export const VoiceService = {
    */
   preloadClonePhrases: (voiceId?: string): void => {
     const voice = getEffectiveVoice(voiceId ?? voiceSelectionService.getSelectedVoiceId());
-    edgeTTSService.preload(COMMON_TTS_PHRASES, voice).catch(() => {});
+    edgeTTSService.preload(COMMON_TTS_PHRASES, voice).catch(() => { });
   },
 
   /**

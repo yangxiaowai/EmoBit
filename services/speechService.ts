@@ -66,13 +66,10 @@ export class SpeechRecognitionService {
         // 检查 FunASR 服务是否可用
         const funasrAvailable = await funasrService.checkConnection();
         if (!funasrAvailable) {
-            const err = new Error(
-                'FunASR 服务不可用。请确保 FunASR 服务器正在运行。\n' +
-                '启动方法: ./scripts/start_funasr.sh\n' +
-                '或运行: python scripts/funasr_server.py'
-            );
-            this.onError?.(err);
-            throw err;
+            // FunASR 不可用时，回退到浏览器云端语音识别
+            console.warn('[SpeechService] FunASR 不可用，使用浏览器云端语音识别');
+            this.startBrowserRecognition(onResult, onError);
+            return;
         }
 
         try {

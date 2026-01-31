@@ -38,7 +38,7 @@ export interface MemoryPhoto {
   tags: string[];
 }
 
-export type DashboardTab = 'overview' | 'health' | 'location' | 'medication' | 'logs';
+export type DashboardTab = 'overview' | 'health' | 'location' | 'medication' | 'faces' | 'logs';
 
 // --- API Types ---
 
