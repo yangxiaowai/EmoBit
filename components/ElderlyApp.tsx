@@ -760,25 +760,21 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
     };
 
     return (
-        <div className="absolute inset-0 z-50 bg-black flex flex-col animate-fade-in font-sans">
-            {/* Immersive Photo (Ken Burns Effect) */}
-            <div className="absolute inset-0 overflow-hidden">
-                <img
-                    key={photo.id}
-                    src={photo.url}
-                    className="w-full h-full object-cover"
-                    alt="Memory"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-black/40"></div>
+        <div className="absolute inset-0 z-50 bg-black animate-fade-in font-sans">
+            {/* 照片区域：绝对定位，top-14 bottom-[280px] 可单独调整照片上下位置 */}
+            <div className="absolute top-14 left-0 right-0 bottom-[260px] flex items-center justify-center">
+                <div className="scale-110 max-w-full max-h-full flex items-center justify-center">
+                    <img
+                        key={photo.id}
+                        src={photo.url}
+                        className="max-w-full max-h-full object-contain"
+                        alt="Memory"
+                    />
+                </div>
             </div>
 
-            {/* Top Info */}
-            <div className="relative z-10 px-6 pt-12 flex justify-between items-start">
-                <div className="bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-white/80 text-xs font-bold flex items-center gap-2">
-                    <ImageIcon size={12} /> 时光回忆录 ({photoIndex + 1}/{ALBUM_MEMORIES.length})
-                </div>
-
-                {/* Close Button */}
+            {/* Close Button */}
+            <div className="absolute top-0 right-0 z-10 px-6 pt-12">
                 <button
                     onClick={onClose}
                     className="w-8 h-8 bg-black/40 backdrop-blur-md rounded-full flex items-center justify-center border border-white/20 text-white hover:bg-white/20 transition-colors z-50"
@@ -787,24 +783,24 @@ const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose
                 </button>
             </div>
 
-            {/* Manual Navigation Buttons - Left/Right */}
-            <div className="absolute inset-y-0 left-0 right-0 z-20 flex items-center justify-between px-4 pointer-events-none">
+            {/* 左右切换按钮：z-30 确保可点击，pt-32 控制按钮上下位置（值越大越靠下） */}
+            <div className="absolute inset-x-0 top-0 bottom-0 z-30 flex items-start justify-between px-4 pt-[80%]">
                 <button
                     onClick={handlePrev}
-                    className="w-12 h-12 bg-black/40 backdrop-blur-md rounded-full flex items-center justify-center border border-white/20 text-white hover:bg-white/30 transition-colors pointer-events-auto active:scale-95"
+                    className="w-12 h-12 bg-black/20 backdrop-blur-sm rounded-full flex items-center justify-center border border-white/15 text-white/90 hover:bg-black/30 transition-colors active:scale-95"
                 >
                     <ChevronLeft size={24} />
                 </button>
                 <button
                     onClick={handleNext}
-                    className="w-12 h-12 bg-black/40 backdrop-blur-md rounded-full flex items-center justify-center border border-white/20 text-white hover:bg-white/30 transition-colors pointer-events-auto active:scale-95"
+                    className="w-12 h-12 bg-black/20 backdrop-blur-sm rounded-full flex items-center justify-center border border-white/15 text-white/90 hover:bg-black/30 transition-colors active:scale-95"
                 >
                     <ChevronRight size={24} />
                 </button>
             </div>
 
-            {/* Bottom Caption / Story */}
-            <div className="mt-auto relative z-10 p-8 pb-16">
+            {/* 文字区域：绝对定位在底部，top-[calc(100%-280px)] 或 bottom-0 h-[280px] 可单独调整 */}
+            <div className="absolute bottom-0 left-0 right-0 z-10 h-[390px] pt-8 px-8 pb-20 bg-gradient-to-t from-black/90 via-black/50 to-transparent overflow-hidden">
                 <div className="mb-4 flex flex-wrap gap-2">
                     {photo.tags.map(tag => (
                         <span key={tag} className="bg-indigo-500/80 backdrop-blur px-2 py-1 rounded-md text-white text-[10px] font-bold shadow-sm">
