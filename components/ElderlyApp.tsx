@@ -4,18 +4,16 @@ import * as THREE from 'three';
 import { SimulationType, SystemStatus, MemoryPhoto } from '../types';
 import { Mic, Battery, Wifi, Signal, Info, ChevronLeft, ChevronRight, Image as ImageIcon, Volume2, X, CloudSun, Loader2, Navigation, ScanLine, Pill, CheckCircle, ArrowUp, ArrowLeft, ArrowRight, MapPin, Camera, User, ScanFace, Box, AlertCircle, MicOff, Sparkles, Settings, Brain } from 'lucide-react';
 import { speechService, SpeechRecognitionResult } from '../services/speechService';
-import { webSpeechService } from '../services/webSpeechService';
 import { mapService, RouteResult, RouteStep } from '../services/mapService';
-import { memoryService, LocationEvent, MemoryAnchor } from '../services/memoryService';
+import { memoryService, LocationEvent } from '../services/memoryService';
 import { VoiceService } from '../services/api';
 import { voiceSelectionService } from '../services/voiceSelectionService';
 import { aiService, AIResponse } from '../services/aiService';
 import { wanderingService } from '../services/wanderingService';
 import { medicationService } from '../services/medicationService';
 import { cognitiveService } from '../services/cognitiveService';
-import { proactiveService } from '../services/proactiveService';
 import AvatarCreator from './AvatarCreator';
-
+import ARNavigationOverlay from './ARNavigationOverlay';
 import WanderingAlert from './WanderingAlert';
 import MedicationReminder from './MedicationReminder';
 import CognitiveReport from './CognitiveReport';
@@ -26,21 +24,7 @@ interface ElderlyAppProps {
 }
 
 // --- Data ---
-// --- Data ---
-// 模拟当前位置（示例用）
-const CURRENT_LOCATION_MOCK = { lat: 39.9142, lng: 116.3974 }; // 靠近 demo_park
-
-const convertAnchorToPhoto = (anchor: MemoryAnchor): MemoryPhoto => ({
-    id: anchor.id,
-    url: anchor.imageUrl || "https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=600&auto=format&fit=crop", // Fallback image
-    date: anchor.createdAt.toLocaleDateString(),
-    location: anchor.name,
-    story: anchor.memoryText,
-    tags: [anchor.category]
-});
-
-// Default Fallback
-const DEFAULT_MEMORIES: MemoryPhoto[] = [
+const MOCK_MEMORIES: MemoryPhoto[] = [
     { id: '1', url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=600&auto=format&fit=crop', date: '1982年 秋', location: '人民公园', story: '这是您和奶奶在人民公园的合影。那时候刚买了第一台胶片相机...', tags: ['家人'] },
     { id: '2', url: 'https://images.unsplash.com/photo-1511895426328-dc8714191300?q=80&w=600&auto=format&fit=crop', date: '1995年 春节', location: '老家院子', story: '这张是大年初一的全家福。大家围在一起包饺子...', tags: ['春节'] },
     { id: '3', url: 'https://images.unsplash.com/photo-1605559424843-9e4c228bf1c2?q=80&w=600&auto=format&fit=crop', date: '2010年 夏', location: '上海世博会', story: '这是咱们一家去上海看世博会。中国馆真的好壮观...', tags: ['旅行'] }
@@ -411,110 +395,231 @@ const CuteAvatar3D = ({ isTalking, isListening, isThinking }: { isTalking: boole
 
 // --- Sub-Components (Full Screen Scenarios) ---
 
-// 2. Medication Guide Scenario (Smart Pillbox Flow)
-const MedicationFlow = ({ step, onClose }: { step: number; onClose?: () => void }) => {
-    // Simplified Smart Pillbox Flow
-    const boxImage = "https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?q=80&w=800"; // Smart Pillbox
+// 1. AR Navigation Scenario (Enhanced HUD with Real Route Data)
+interface ARNavigationFlowProps {
+    step: number;
+    routeData?: RouteResult | null;
+    destination?: string;
+}
 
-    let state = { text: "请等待药盒提示", sub: "正在连接智能药盒...", img: boxImage, overlay: null as React.ReactNode };
+const ARNavigationFlow = ({ step, routeData, destination = '天安门广场' }: ARNavigationFlowProps) => {
+    // 使用真实路线数据或回退到模拟数据
+    const getStepIcon = (action: RouteStep['action'] | undefined) => {
+        switch (action) {
+            case 'left': return <ArrowLeft size={64} className="animate-bounce-left" />;
+            case 'right': return <ArrowRight size={64} className="animate-bounce-right" />;
+            case 'arrive': return <MapPin size={64} className="animate-bounce" />;
+            case 'start': return <Navigation size={64} />;
+            default: return <ArrowUp size={64} className="animate-bounce-up" />;
+        }
+    };
 
-    // Simply simulate connection -> open -> taken
-    const safeStep = Math.min(step, 3);
+    // 使用真实路线数据构建指令
+    const buildInstructions = () => {
+        if (routeData?.success && routeData.steps.length > 0) {
+            const steps = [
+                { text: "正在规划路线...", sub: "请稍候", icon: <Loader2 className="animate-spin" size={64} /> },
+                ...routeData.steps.slice(0, 4).map((s) => ({
+                    text: s.instruction || `${s.action === 'left' ? '左转' : s.action === 'right' ? '右转' : '直行'}`,
+                    sub: `距离 ${mapService.formatDistance(s.distance)}`,
+                    icon: getStepIcon(s.action),
+                })),
+                { text: "即将到达目的地", sub: destination, icon: <MapPin size={64} className="animate-bounce" /> },
+            ];
+            return steps;
+        }
+        // 回退到默认模拟数据
+        return [
+            { text: "正在定位...", sub: "请扫描周围环境", icon: <Loader2 className="animate-spin" size={64} /> },
+            { text: "前方路口左转", sub: "距离 50 米", icon: <ArrowLeft size={64} className="animate-bounce-left" /> },
+            { text: "沿大路直行", sub: "距离 300 米", icon: <ArrowUp size={64} className="animate-bounce-up" /> },
+            { text: "即将到达目的地", sub: destination, icon: <MapPin size={64} className="animate-bounce" /> },
+        ];
+    };
 
-    if (safeStep === 0) {
+    const instructions = buildInstructions();
+    const current = instructions[Math.min(step, instructions.length - 1)];
+    const bgImage = step === 1
+        ? "https://images.unsplash.com/photo-1477959858617-67f85cf4f1df?q=80&w=800&auto=format&fit=crop"
+        : "https://images.unsplash.com/photo-1597022227183-49d7f646098b?q=80&w=800&auto=format&fit=crop";
+
+    // 路线概览信息
+    const routeInfo = routeData?.success ? {
+        distance: mapService.formatDistance(routeData.distance),
+        duration: mapService.formatDuration(routeData.duration),
+    } : null;
+
+    return (
+        <div className="absolute inset-0 z-50 bg-black text-white flex flex-col relative overflow-hidden animate-fade-in font-sans">
+            {/* AR Background */}
+            <div className="absolute inset-0">
+                <img src={bgImage} className="w-full h-full object-cover opacity-80" alt="AR View" />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/60"></div>
+            </div>
+
+            {/* HUD Header */}
+            <div className="relative z-10 px-6 pt-12 flex justify-between items-start">
+                <div className="bg-black/40 backdrop-blur-md px-4 py-2 rounded-xl border border-white/20">
+                    <p className="text-[10px] text-white/70 uppercase">目的地</p>
+                    <p className="font-bold text-lg">{destination}</p>
+                    {routeInfo && (
+                        <p className="text-xs text-white/60 mt-1">{routeInfo.distance} · {routeInfo.duration}</p>
+                    )}
+                </div>
+                <div className="w-12 h-12 bg-emerald-500/20 backdrop-blur rounded-full flex items-center justify-center border border-emerald-400/50 animate-pulse">
+                    <Navigation size={24} className="text-emerald-400" />
+                </div>
+            </div>
+
+            {/* AR Elements (Center) */}
+            <div className="relative z-10 flex-1 flex flex-col items-center justify-center">
+                {step > 0 && (
+                    <div className="bg-indigo-600/80 backdrop-blur p-6 rounded-[2rem] shadow-[0_0_50px_rgba(79,70,229,0.5)] border-4 border-white/30 transform transition-all duration-500">
+                        {current.icon}
+                    </div>
+                )}
+
+                {/* 3D Path visualization */}
+                {step >= 1 && step < instructions.length - 1 && (
+                    <div className="absolute bottom-0 w-32 h-64 bg-gradient-to-t from-indigo-500/50 to-transparent transform perspective-3d rotate-x-60"></div>
+                )}
+            </div>
+
+            {/* Bottom Instruction Panel */}
+            <div className="relative z-10 p-6 pb-12">
+                <div className="bg-white/95 text-slate-900 p-6 rounded-3xl shadow-2xl animate-slide-up border border-white/50">
+                    <div className="flex items-center gap-4">
+                        <div className="flex-1">
+                            <h2 className="text-3xl font-black mb-1">{current.text}</h2>
+                            <p className="text-slate-500 font-bold text-lg flex items-center gap-2">
+                                {step === 0 ? <Loader2 size={16} className="animate-spin" /> : <Volume2 size={18} className="text-indigo-600" />}
+                                {current.sub}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <style>{`
+                .animate-bounce-left { animation: bounceLeft 1s infinite; }
+                .animate-bounce-up { animation: bounceUp 1s infinite; }
+                .animate-bounce-right { animation: bounceRight 1s infinite; }
+                @keyframes bounceLeft { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-10px); } }
+                @keyframes bounceUp { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+                @keyframes bounceRight { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(10px); } }
+            `}</style>
+        </div>
+    );
+};
+
+// 2. Medication Guide Scenario (Detailed CV Flow)
+const MedicationFlow = ({ step }: { step: number }) => {
+    // Step 0: Scan Prompt -> Step 1: Scanning -> Step 2: Identified -> Step 3: Action -> Step 4: Check Hand -> Step 5: Swallow Check
+    const scanImage = "https://images.unsplash.com/photo-1628771065518-0d82f1938462?q=80&w=800&auto=format&fit=crop"; // Medicine Box
+    const handImage = "https://images.unsplash.com/photo-1550572017-edd951aa8f72?q=80&w=800&auto=format&fit=crop"; // Pills in hand
+    const drinkingImage = "https://images.unsplash.com/photo-1543506987-a2e6669c5e53?q=80&w=800&auto=format&fit=crop"; // Drinking water
+
+    let state = { text: "", sub: "", img: scanImage, overlay: null as React.ReactNode };
+
+    if (step === 0) {
         state = {
-            text: "正在连接智能药盒...",
-            sub: "请确保药盒已开启",
-            img: boxImage,
-            overlay: <div className="absolute inset-0 flex items-center justify-center"><Loader2 className="animate-spin text-white" size={64} /></div>
+            text: "请拿出药盒", sub: "将药盒正面放入框内", img: scanImage,
+            overlay: <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 border-2 border-white/50 rounded-2xl flex items-center justify-center"><ScanLine className="text-white opacity-50" size={32} /></div>
         };
-    } else if (safeStep === 1) {
+    } else if (step === 1) {
         state = {
-            text: "药盒已连接",
-            sub: "检测到今日药仓未开启",
-            img: boxImage,
-            overlay: <CheckCircle className="text-emerald-500 animate-pulse" size={64} />
+            text: "正在识别...", sub: "保持药盒稳定", img: scanImage,
+            overlay: <div className="absolute inset-12 border-2 border-indigo-400 rounded-xl animate-pulse flex items-center justify-center bg-indigo-500/10"><ScanLine className="text-indigo-400 w-full h-full opacity-80 animate-ping" /></div>
         };
-    } else if (safeStep === 2) {
+    } else if (step === 2) {
         state = {
-            text: "请取出药物",
-            sub: "药盒第3仓已自动弹开",
-            img: boxImage,
+            text: "识别成功：阿司匹林", sub: "100mg肠溶片", img: scanImage,
             overlay: (
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white/90 px-6 py-4 rounded-xl shadow-xl border-2 border-indigo-500 animate-bounce">
-                    <p className="text-xl font-bold text-indigo-700">请取药</p>
+                <div className="absolute top-1/3 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur px-4 py-2 rounded-xl border border-emerald-500 shadow-lg flex items-center gap-2">
+                    <CheckCircle size={16} className="text-emerald-500" />
+                    <span className="font-bold text-slate-800">匹配处方</span>
                 </div>
             )
         };
+    } else if (step === 3) {
         state = {
-            text: "服药确认",
-            sub: "检测到药物已取出",
-            img: boxImage,
-            overlay: <CheckCircle className="text-emerald-500" size={80} />
+            text: "请倒出 2 粒", sub: "放在手心让我看看", img: handImage,
+            overlay: <div className="absolute inset-0 flex items-center justify-center"><div className="w-48 h-48 border-2 border-dashed border-yellow-400 rounded-full animate-spin-slow opacity-50"></div></div>
+        };
+    } else if (step === 4) {
+        state = {
+            text: "数量正确 (2粒)", sub: "请准备温水送服", img: handImage,
+            overlay: (
+                <>
+                    <div className="absolute top-1/2 left-1/2 -translate-x-12 -translate-y-12 w-6 h-6 border-2 border-green-400 rounded-full"></div>
+                    <div className="absolute top-1/2 left-1/2 translate-x-4 -translate-y-8 w-6 h-6 border-2 border-green-400 rounded-full"></div>
+                    <div className="absolute bottom-1/3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-4 py-1 rounded-full text-sm font-bold shadow-lg">Count: 2</div>
+                </>
+            )
+        }
+    } else {
+        state = {
+            text: "检测服药动作", sub: "请正对摄像头吞咽", img: drinkingImage,
+            overlay: (
+                <div className="absolute inset-0">
+                    <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-40 h-40 border-2 border-indigo-400 rounded-full opacity-50"></div>
+                    <div className="absolute bottom-32 left-0 right-0 text-center">
+                        <div className="inline-flex items-center gap-2 bg-black/60 text-white px-3 py-1 rounded-full text-xs">
+                            <ScanFace size={12} /> 动作分析中...
+                        </div>
+                    </div>
+                </div>
+            )
         };
     }
 
-    // Auto-close on final step
-    useEffect(() => {
-        if (safeStep >= 3) {
-            const timer = setTimeout(() => {
-                onClose?.();
-            }, 5000);
-            return () => clearTimeout(timer);
-        }
-    }, [safeStep, onClose]);
-
-
     return (
         <div className="absolute inset-0 z-50 bg-slate-900 flex flex-col animate-fade-in font-sans">
+            {/* Camera Feed Simulation */}
             <div className="flex-1 relative overflow-hidden bg-black">
-                <img src={state.img} className="w-full h-full object-cover opacity-80" alt="Medication" />
-                <div className="absolute inset-0 flex items-center justify-center">{state.overlay}</div>
+                <img src={state.img} className="w-full h-full object-cover opacity-90" alt="Camera" />
+
+                {/* Status Badges */}
+                <div className="absolute top-4 right-4 bg-black/50 backdrop-blur text-white px-3 py-1 rounded-full text-xs font-mono flex items-center gap-2 border border-white/10">
+                    <Camera size={12} className="text-red-500 animate-pulse" /> AI Vision Active
+                </div>
+
+                {state.overlay}
             </div>
-            <div className="bg-white rounded-t-[2.5rem] p-8 -mt-6 relative z-10 shadow-2xl">
-                <h2 className="text-2xl font-black text-slate-800 mb-1">{state.text}</h2>
-                <p className="text-slate-500 font-bold flex items-center gap-2">
-                    <Volume2 size={16} className="text-indigo-500" />
-                    {state.sub}
-                </p>
+
+            {/* Interactive Guide Panel */}
+            <div className="bg-white rounded-t-[2.5rem] p-8 -mt-6 relative z-10 shadow-[0_-10px_40px_rgba(0,0,0,0.2)]">
+                <div className="w-12 h-1.5 bg-slate-200 rounded-full mx-auto mb-6"></div>
+                <div className="flex items-start gap-4">
+                    <div className={`w-14 h-14 rounded-full flex items-center justify-center shrink-0 transition-colors duration-300 ${step === 2 || step >= 4 ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
+                        {step >= 5 ? <CheckCircle size={28} /> : <Pill size={28} />}
+                    </div>
+                    <div>
+                        <h2 className="text-2xl font-black text-slate-800 mb-1">{state.text}</h2>
+                        <p className="text-slate-500 font-bold flex items-center gap-2">
+                            <Volume2 size={16} className="text-indigo-500" />
+                            {state.sub}
+                        </p>
+                    </div>
+                </div>
+
+                {/* Progress Steps */}
                 <div className="flex gap-2 mt-8">
-                    {[0, 1, 2, 3].map(i => (
-                        <div key={i} className={`h-2 rounded-full flex-1 transition-all ${i <= safeStep ? 'bg-emerald-500' : 'bg-slate-200'}`} />
+                    {[0, 1, 2, 3, 4, 5].map(i => (
+                        <div key={i} className={`h-2 rounded-full flex-1 transition-all duration-500 ${i <= step ? 'bg-indigo-600' : 'bg-slate-200'}`}></div>
                     ))}
                 </div>
-                {safeStep >= 3 && (
-                    <button
-                        onClick={onClose}
-                        className="mt-6 w-full bg-slate-900 text-white rounded-xl py-4 font-bold active:scale-95 transition-transform"
-                    >
-                        完成
-                    </button>
-                )}
             </div>
         </div>
     );
 };
 
-// 3. Immersive Memories Scenario (手动/语音切换模式)
-const MemoriesFlow = ({ step, memories, onClose, onPrev, onNext }: { step: number; memories: MemoryPhoto[]; onClose: () => void; onPrev: () => void; onNext: () => void }) => {
+// 3. Immersive Memories Scenario (手动切换模式)
+const MemoriesFlow = ({ step, onClose, onPrev, onNext }: { step: number; onClose: () => void; onPrev: () => void; onNext: () => void }) => {
     // Loop through photos based on step
-    const safeMemories = memories.length > 0 ? memories : DEFAULT_MEMORIES;
-    const photoIndex = step % safeMemories.length;
-    const photo = safeMemories[photoIndex];
+    const photoIndex = step % MOCK_MEMORIES.length;
+    const photo = MOCK_MEMORIES[photoIndex];
     const [isSpeaking, setIsSpeaking] = useState(false);
-
-    // Update AI Service Context when photo changes
-    useEffect(() => {
-        aiService.setContext(`老人正在观看照片：
-        地点：${photo.location}
-        时间：${photo.date}
-        背后的故事：${photo.story}
-        标签：${photo.tags.join(', ')}
-        
-        如果老人对此照片发表评论，请结合上述信息进行回应。`);
-
-        return () => aiService.clearContext();
-    }, [photo]);
 
     // 播放当前照片的语音（用户点击播放或切换时触发）
     const playNarration = useCallback(() => {
@@ -537,8 +642,8 @@ const MemoriesFlow = ({ step, memories, onClose, onPrev, onNext }: { step: numbe
         setIsSpeaking(false);
         onPrev();
         setTimeout(() => {
-            const prevIndex = (step - 1 + safeMemories.length) % safeMemories.length;
-            const prevPhoto = safeMemories[prevIndex];
+            const prevIndex = (step - 1 + MOCK_MEMORIES.length) % MOCK_MEMORIES.length;
+            const prevPhoto = MOCK_MEMORIES[prevIndex];
             setIsSpeaking(true);
             VoiceService.speak(`${prevPhoto.location}。${prevPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
@@ -549,8 +654,8 @@ const MemoriesFlow = ({ step, memories, onClose, onPrev, onNext }: { step: numbe
         setIsSpeaking(false);
         onNext();
         setTimeout(() => {
-            const nextIndex = (step + 1) % safeMemories.length;
-            const nextPhoto = safeMemories[nextIndex];
+            const nextIndex = (step + 1) % MOCK_MEMORIES.length;
+            const nextPhoto = MOCK_MEMORIES[nextIndex];
             setIsSpeaking(true);
             VoiceService.speak(`${nextPhoto.location}。${nextPhoto.story}`, undefined, undefined, () => setIsSpeaking(false)).catch(() => setIsSpeaking(false));
         }, 300);
@@ -572,7 +677,7 @@ const MemoriesFlow = ({ step, memories, onClose, onPrev, onNext }: { step: numbe
             {/* Top Info */}
             <div className="relative z-10 px-6 pt-12 flex justify-between items-start">
                 <div className="bg-black/30 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-white/80 text-xs font-bold flex items-center gap-2">
-                    <ImageIcon size={12} /> 时光回忆录 ({photoIndex + 1}/{safeMemories.length})
+                    <ImageIcon size={12} /> 时光回忆录 ({photoIndex + 1}/{MOCK_MEMORIES.length})
                 </div>
 
                 {/* Close Button */}
@@ -660,28 +765,6 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     const [time, setTime] = useState<string>('');
     const [dateStr, setDateStr] = useState<string>('');
 
-    // Chat UI States
-    const [messages, setMessages] = useState<{ role: 'user' | 'ai', content: string, type?: 'image' | 'video', mediaUrl?: string }[]>([]);
-    const [inputText, setInputText] = useState('');
-    const [showUploadMenu, setShowUploadMenu] = useState(false);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-    const chatContainerRef = useRef<HTMLDivElement>(null);
-    const imageInputRef = useRef<HTMLInputElement>(null);
-    const videoInputRef = useRef<HTMLInputElement>(null);
-
-    // Staging Media
-    const [pendingMedia, setPendingMedia] = useState<{ type: 'image' | 'video', url: string } | null>(null);
-
-    // Auto-scroll chat
-    useEffect(() => {
-        if (chatContainerRef.current) {
-            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-        }
-    }, [messages]);
-
-
-
-
     // Scenario Flow State
     const [activeScenario, setActiveScenario] = useState<'none' | 'nav' | 'meds' | 'memory'>('none');
     const [step, setStep] = useState(0);
@@ -693,8 +776,8 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     const [isThinking, setIsThinking] = useState(false);
     const [aiMessage, setAiMessage] = useState("张爷爷，我在呢。有什么想聊的吗？");
 
+    // 语音识别状态
     const [isRecording, setIsRecording] = useState(false);
-    const [isDictating, setIsDictating] = useState(false);
     const [speechError, setSpeechError] = useState<string | null>(null);
     const [interimText, setInterimText] = useState<string>('');
 
@@ -712,37 +795,14 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
 
     // 认知报告状态
     const [showCognitiveReport, setShowCognitiveReport] = useState(false);
-    const [memories, setMemories] = useState<MemoryPhoto[]>(DEFAULT_MEMORIES);
 
     // Auto-scroll ref
-
+    const messagesEndRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         if (messagesEndRef.current) {
             messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
         }
     }, [aiMessage, voiceInputDisplay, isTalking]);
-
-    // Sync Busy state to ProactiveService
-    useEffect(() => {
-        proactiveService.setBusy(isThinking || isTalking);
-    }, [isThinking, isTalking]);
-
-    // Global Activity Tracking (Reset idle timer on any click/touch)
-    useEffect(() => {
-        const handleActivity = () => {
-            proactiveService.resetTimer();
-        };
-
-        window.addEventListener('mousedown', handleActivity);
-        window.addEventListener('touchstart', handleActivity);
-        window.addEventListener('keydown', handleActivity);
-
-        return () => {
-            window.removeEventListener('mousedown', handleActivity);
-            window.removeEventListener('touchstart', handleActivity);
-            window.removeEventListener('keydown', handleActivity);
-        };
-    }, []);
 
     // Edge 预生成：确认音「嗯」等
     useEffect(() => {
@@ -821,37 +881,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
         };
     }, []);
 
-    // Proactive Service Subscription
-    useEffect(() => {
-        // Start service
-        proactiveService.start();
-
-        // Immediate Trigger (Force)
-        setTimeout(() => {
-            proactiveService.triggerImmediately();
-        }, 1000);
-
-        const unsubscribe = proactiveService.subscribe((msg, type) => {
-            if (activeScenario !== 'none') return; // Don't interrupt scenarios
-
-            setAiMessage(msg);
-            setIsTalking(true);
-
-            // Speak the proactive message
-            const voiceId = voiceSelectionService.getSelectedVoiceId();
-            VoiceService.speak(msg, voiceId).catch(() => { });
-
-            // Auto-hide talking state after a while if no interaction
-            setTimeout(() => {
-                if (isTalking) setIsTalking(false);
-            }, 5000 + msg.length * 200);
-        });
-
-        return () => {
-            unsubscribe();
-            proactiveService.stop();
-        };
-    }, [activeScenario]); // Re-subscribe if scenario changes to ensure we don't miss updates, though proactive service is global---
+    // --- Logic: Handle External Simulations & Voice Triggers ---
     useEffect(() => {
         if (simulation === SimulationType.NONE) {
             setActiveScenario('none');
@@ -1185,27 +1215,18 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 setTimeout(() => {
                     switch (response.shouldTriggerAction) {
                         case 'nav':
-                            // 替换为通知家人逻辑
-                            setAiMessage('好的，为了您的安全，已通知您的家人（儿子）您的位置。请在原地稍候。');
-                            setIsTalking(true);
-                            // 不再启动导航场景
-                            // setActiveScenario('nav');
+                            const destMatch = result.text.match(/去(.+?)(?:怎么走|$)/);
+                            const destination = destMatch?.[1] || '天安门广场';
+                            setNavDestination(destination);
+                            mapService.planWalkingRoute('北京市', destination).then(setRouteData);
+                            setActiveScenario('nav');
+                            setStep(0);
                             break;
                         case 'meds':
                             setActiveScenario('meds');
                             setStep(0);
                             break;
                         case 'memory':
-                            // Fetch memories based on location
-                            const nearbyAnchors = memoryService.getMemoriesByLocation(CURRENT_LOCATION_MOCK.lat, CURRENT_LOCATION_MOCK.lng);
-                            console.log('[App] Found nearby memories:', nearbyAnchors);
-
-                            if (nearbyAnchors.length > 0) {
-                                setMemories(nearbyAnchors.map(convertAnchorToPhoto));
-                            } else {
-                                setMemories(DEFAULT_MEMORIES);
-                            }
-
                             setActiveScenario('memory');
                             setStep(0);
                             break;
@@ -1243,143 +1264,187 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
     }, []);
 
     // 处理语音识别结果 - 使用AI大模型
-    // --- Logic: Voice Interaction (Web Speech API) ---
-    const toggleRecording = useCallback(() => {
-        if (isRecording) {
-            setIsRecording(false);
-            webSpeechService.stop();
-        } else {
-            setIsRecording(true);
-            setSpeechError(null);
+    const handleSpeechResult = useCallback(async (result: SpeechRecognitionResult) => {
+        // 详细日志输出
+        console.log('[ElderlyApp] ============================================================');
+        console.log('[ElderlyApp] 📥 收到识别结果:', {
+            text: result.text,
+            isFinal: result.isFinal,
+            confidence: result.confidence,
+        });
+        console.log('[ElderlyApp] ============================================================');
 
-            webSpeechService.start(
-                (result) => {
-                    setInterimText(result.transcript);
-                    if (result.isFinal) {
-                        setInterimText('');
-                        setIsRecording(false);
-                        handleVoiceResult(result.transcript);
-                    }
-                },
-                (error) => {
-                    setSpeechError(error);
-                    setIsRecording(false);
-                }
-            );
+        // 保存最后一个结果（包括中间结果）
+        if (result.text && result.text.trim()) {
+            lastRecognitionResultRef.current = result;
         }
-    }, [isRecording]);
 
-    const handleSendMessage = (textOverride?: string) => {
-        const text = textOverride || inputText;
-        if (!text.trim() && !pendingMedia) return;
+        if (!result.isFinal) {
+            // 收集中间结果
+            if (result.text && result.text.trim()) {
+                interimResultsRef.current.push(result.text.trim());
+                console.log('[ElderlyApp] 🔄 中间结果（已收集，等待用户停止说话）:', result.text);
+                console.log('[ElderlyApp]   当前已收集', interimResultsRef.current.length, '个中间结果');
+            }
+            setInterimText(result.text);
 
-        proactiveService.resetTimer(); // Reset on send
-
-        // Combine text and media
-        const combinedContent = text.trim() || (pendingMedia?.type === 'image' ? '张爷爷分享了一张照片' : '张爷爷分享了一个视频');
-
-        // Add user message to history
-        setMessages(prev => [...prev, {
-            role: 'user',
-            content: combinedContent,
-            type: pendingMedia?.type,
-            mediaUrl: pendingMedia?.url
-        }]);
-
-        setInputText('');
-        setPendingMedia(null);
-
-        // AI Response Logic
-        handleVoiceResult(combinedContent);
-    };
-
-    const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'image' | 'video') => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        const url = URL.createObjectURL(file);
-
-        // Just set pending media, don't send yet
-        setPendingMedia({ type, url });
-        setShowUploadMenu(false);
-    };
-    const handleVoiceResult = async (text: string) => {
-        console.log('Voice Result:', text);
-        setVoiceInputDisplay(text);
-        setIsThinking(true);
-
-        try {
-            // Call AI Service
-            const response = await aiService.chat(text);
-
-            setIsThinking(false);
-            setAiMessage(response.text);
-            setIsTalking(true);
-
-            // Add to chat history
-            setMessages(prev => [...prev, { role: 'ai', content: response.text }]);
-
-            // Speak response
-            VoiceService.speak(response.text).catch(() => { });
-
-            // Handle Actions
-            if (response.shouldTriggerAction) {
-                setTimeout(() => {
-                    setActiveScenario(response.shouldTriggerAction as any);
-                    setIsTalking(false);
-                    setStep(0);
-                }, 2000);
-            } else {
-                setTimeout(() => setIsTalking(false), 3000);
+            // 清除之前的超时定时器
+            if (finalResultTimeoutRef.current) {
+                clearTimeout(finalResultTimeoutRef.current);
             }
 
-        } catch (e) {
-            setIsThinking(false);
-            setAiMessage("抱歉，我没听清，请再说一遍。");
-            setMessages(prev => [...prev, { role: 'ai', content: "抱歉，我没听清，请再说一遍。" }]);
+            // 改进的超时机制：只在用户停止说话后（2秒内没有新的中间结果）才处理
+            // 增加等待时间，确保用户真正停止说话，避免在用户说话过程中触发
+            finalResultTimeoutRef.current = setTimeout(() => {
+                // 检查是否还在处理中，避免重复处理
+                if (isProcessingRef.current) {
+                    console.log('[ElderlyApp] ⚠️ 已在处理中，忽略超时触发');
+                    return;
+                }
+
+                // 整合所有中间结果
+                if (interimResultsRef.current.length > 0) {
+                    const consolidatedText = consolidateResults(interimResultsRef.current);
+                    if (consolidatedText) {
+                        console.log('[ElderlyApp] ⚠️ 用户停止说话（2秒内无新结果），整合并处理结果');
+                        console.log('[ElderlyApp]   整合后的文本:', consolidatedText);
+                        // 处理整合后的结果
+                        processFinalResult({
+                            text: consolidatedText,
+                            isFinal: true,
+                            confidence: undefined,
+                        });
+                    }
+                }
+            }, 2000); // 增加到2秒，确保用户真正停止说话
+
+            return;
         }
-    };
+
+        // 清除超时定时器（已收到最终结果）
+        if (finalResultTimeoutRef.current) {
+            clearTimeout(finalResultTimeoutRef.current);
+            finalResultTimeoutRef.current = null;
+        }
+
+        // 如果服务器发送了最终结果，优先使用它
+        // 但也可以整合中间结果和最终结果，选择最完整的
+        let finalText = result.text;
+        if (interimResultsRef.current.length > 0) {
+            // 将最终结果也加入整合列表
+            interimResultsRef.current.push(result.text.trim());
+            const consolidatedText = consolidateResults(interimResultsRef.current);
+            if (consolidatedText && consolidatedText.length > finalText.length) {
+                console.log('[ElderlyApp] 📝 使用整合后的结果（比服务器最终结果更完整）');
+                finalText = consolidatedText;
+            }
+        }
+
+        // 处理最终结果（中间结果会在processFinalResult中清空）
+        processFinalResult({
+            ...result,
+            text: finalText,
+        });
+    }, [processFinalResult, consolidateResults]);
+
+    // 开始/停止语音识别
+    const toggleRecording = useCallback(async () => {
+        if (isRecording) {
+            console.log('[ElderlyApp] 用户手动停止录音');
+
+            // 清除超时定时器（停止自动处理）
+            if (finalResultTimeoutRef.current) {
+                clearTimeout(finalResultTimeoutRef.current);
+                finalResultTimeoutRef.current = null;
+            }
+
+            // 先停止识别，等待服务器发送最终结果
+            setIsRecording(false);
+            setIsListening(false);
+            speechService.stopRecognition();
+
+            // 等待服务器发送最终结果（最多等待10秒）
+            // 服务器处理音频可能需要5-10秒（特别是长音频），所以增加等待时间
+            // 如果10秒内没有收到最终结果，整合所有中间结果
+            setTimeout(() => {
+                // 检查是否已经在处理中
+                if (isProcessingRef.current) {
+                    console.log('[ElderlyApp] 已在处理最终结果，无需使用中间结果');
+                    return;
+                }
+
+                // 整合所有中间结果（作为后备方案）
+                if (interimResultsRef.current.length > 0) {
+                    const consolidatedText = consolidateResults(interimResultsRef.current);
+                    if (consolidatedText) {
+                        console.log('[ElderlyApp] ⚠️ 等待10秒后未收到最终结果，整合并处理中间结果');
+                        console.log('[ElderlyApp]   整合后的文本:', consolidatedText);
+                        processFinalResult({
+                            text: consolidatedText,
+                            isFinal: true,
+                            confidence: undefined,
+                        });
+                    }
+                } else if (!lastRecognitionResultRef.current) {
+                    console.log('[ElderlyApp] ⚠️ 没有识别结果，无法处理');
+                    console.log('[ElderlyApp] 提示：服务器可能仍在处理音频，请稍候...');
+                }
+            }, 10000); // 等待10秒让服务器发送最终结果（支持长音频处理）
+
+            return;
+        }
+
+        try {
+            setSpeechError(null);
+            setIsRecording(true);
+            setIsListening(true);
+            isProcessingRef.current = false; // 重置处理标志
+            lastRecognitionResultRef.current = null; // 重置最后一个结果
+            interimResultsRef.current = []; // 清空中间结果数组
+
+            await speechService.startRecognition(
+                handleSpeechResult,
+                (error) => {
+                    console.error('语音识别错误:', error);
+                    setSpeechError(error.message);
+                    setIsRecording(false);
+                    setIsListening(false);
+                }
+            );
+        } catch (error) {
+            console.error('启动语音识别失败:', error);
+            setSpeechError('无法启动语音识别');
+            setIsRecording(false);
+            setIsListening(false);
+        }
+    }, [isRecording, handleSpeechResult]);
 
     // Helper to trigger voice command flow (used by both real recognition and simulation)
     const triggerVoiceCommand = useCallback((userText: string, targetScenario: 'nav' | 'meds' | 'memory', aiResponse: string) => {
-        proactiveService.resetTimer(); // Reset idle timer
+        // 1. Reset
+        setActiveScenario('none');
+        setStep(0);
+        setIsRecording(false);
+        speechService.stopRecognition();
+
+        // 2. Display User Voice Input
         setVoiceInputDisplay(userText);
-        // Simulate processing delay
-        setIsThinking(true);
+        setIsListening(true);
+
+        // 3. AI Processes (Reduced delay)
         setTimeout(() => {
-            setIsThinking(false);
+            setIsListening(false);
+            setVoiceInputDisplay(null);
             setAiMessage(aiResponse);
             setIsTalking(true);
-            setActiveScenario(targetScenario);
 
-            // Speak reply
-            VoiceService.speak(aiResponse).catch(() => { });
-
+            // 4. AI Finishes talking and Switches UI (Reduced delay)
             setTimeout(() => {
                 setIsTalking(false);
-                // Start scenario flow
-                setStep(0);
-            }, 2000);
-        }, 1000);
+                setActiveScenario(targetScenario);
+            }, 800); // Reduced from 2000
+        }, 600); // Reduced from 1500
     }, []);
-
-
-
-    // --- Logic: Map Initialization ---
-    useEffect(() => {
-        if (activeScenario === 'nav') {
-            mapService.init().then(success => {
-                if (success) {
-                    setTimeout(async () => {
-                        const map = await mapService.createMap('amap-container');
-                        if (map) {
-                            console.log('Map created');
-                        }
-                    }, 500); // Wait for container to render
-                }
-            });
-        }
-    }, [activeScenario]);
 
     // --- Logic: Scenario Auto-Progression (The 3-Second Rule) ---
     useEffect(() => {
@@ -1406,42 +1471,16 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 </div>
 
                 {/* --- SCENARIO LAYERS --- */}
-                {activeScenario === 'nav' && (
-                    <div className="absolute inset-0 bg-white z-[60] flex flex-col animate-fade-in-up">
-                        {/* Map Container */}
-                        <div id="amap-container" className="flex-1 w-full bg-slate-100 flex items-center justify-center relative">
-                            <p className="text-slate-400">正在加载地图...</p>
-                            {/* Map rendered here */}
-                        </div>
-                        {/* Controls */}
-                        <div className="p-4 bg-white shadow-lg rounded-t-3xl z-10">
-                            <h3 className="text-lg font-bold mb-2">正在导航回家</h3>
-                            <div className="flex gap-4">
-                                <button onClick={() => { setActiveScenario('none'); setStep(0); }} className="flex-1 bg-slate-100 py-3 rounded-xl font-bold">退出</button>
-                                <button className="flex-1 bg-blue-600 text-white py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30">开始导航</button>
-                            </div>
-                        </div>
-                    </div>
-                )}
-                {activeScenario === 'meds' && (
-                    <MedicationFlow
-                        step={step}
-                        onClose={() => {
-                            setActiveScenario('none');
-                            setStep(0);
-                        }}
-                    />
-                )}
+                {activeScenario === 'nav' && <ARNavigationFlow step={step} routeData={routeData} destination={navDestination} />}
+                {activeScenario === 'meds' && <MedicationFlow step={step} />}
                 {activeScenario === 'memory' && (
                     <MemoriesFlow
                         step={step}
-                        memories={memories}
                         onClose={() => {
                             setActiveScenario('none');
-                            setStep(0);
-                            aiService.clearContext();
+                            VoiceService.stop();
                         }}
-                        onPrev={() => setStep(prev => prev > 0 ? prev - 1 : prev)}
+                        onPrev={() => setStep(prev => Math.max(0, prev - 1))}
                         onNext={() => setStep(prev => prev + 1)}
                     />
                 )}
@@ -1461,10 +1500,10 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                         </div>
                     </div>
 
-                    {/* 单个动态 3D 数字人居中 */}
-                    <div className="flex-1 flex items-center justify-center relative min-h-0 -mt-24 overflow-hidden">
+                    {/* 单个动态 3D 数字人居中（仅此一处渲染，无静态重复） */}
+                    <div className="flex-1 flex items-center justify-center relative min-h-0 -mt-8 overflow-hidden">
                         <div className="relative flex items-center justify-center group cursor-pointer" onClick={() => setShowAvatarCreator(true)}>
-                            <div className="transform scale-75 shrink-0">
+                            <div className="transform scale-90 shrink-0">
                                 <CuteAvatar3D
                                     isTalking={isTalking}
                                     isListening={isListening}
@@ -1497,7 +1536,7 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                                 {isListening && <Mic size={12} className="animate-pulse" />}
                                 {isThinking && <Loader2 size={12} className="animate-spin" />}
                                 {!isListening && !isThinking && <Volume2 size={12} />}
-                                {isListening ? "正在聆听..." : isThinking ? "思考中..." : "陪伴助手"}
+                                {isListening ? "正在聆听..." : isThinking ? "思考中..." : "AI 陪伴助手"}
                             </div>
                             <div className="flex-1 min-w-0 overflow-hidden">
                                 {voiceInputDisplay ? (
@@ -1519,164 +1558,56 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
 
                     {/* 导航栏：相册 / 麦克风 / 服药 — 固定在屏幕底部 */}
                     {activeScenario === 'none' && (
-                        <>
-                            {/* Chat List Overlay */}
-                            <div
-                                ref={chatContainerRef}
-                                className="absolute top-[65%] left-0 right-0 bottom-24 px-4 overflow-y-auto z-30 space-y-2 no-scrollbar gradient-mask-t"
-                                style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 20%)' }}
-                            >
-                                <div className="h-1"></div> {/* Minimized spacer */}
-                                {messages.map((msg, idx) => (
-                                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
-                                        <div className={`max-w-[80%] p-3 rounded-2xl text-sm shadow-sm ${msg.role === 'user'
-                                            ? 'bg-indigo-600 text-white rounded-tr-sm'
-                                            : 'bg-white text-slate-700 rounded-tl-sm border border-slate-100'
-                                            }`}>
-                                            {msg.type === 'image' && msg.mediaUrl && (
-                                                <div className="mb-2 rounded-lg overflow-hidden border border-white/20 shadow-sm max-h-24 max-w-[120px]">
-                                                    <img src={msg.mediaUrl} alt="Upload" className="w-full h-full object-cover" />
-                                                </div>
-                                            )}
-                                            {msg.type === 'video' && (
-                                                <div className="mb-2 rounded-lg overflow-hidden bg-black flex items-center justify-center p-0.5 relative max-h-24 max-w-[120px]">
-                                                    <div className="absolute inset-0 flex items-center justify-center">
-                                                        <div className="w-8 h-8 rounded-full bg-white/30 flex items-center justify-center backdrop-blur-sm">
-                                                            <div className="w-0 h-0 border-l-[6px] border-l-white border-t-[4px] border-t-transparent border-b-[4px] border-b-transparent ml-0.5"></div>
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            )}
-                                            {msg.content}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
+                        <div className="absolute bottom-0 left-0 right-0 pt-3 pb-6 px-4 bg-gradient-to-t from-white/30 to-transparent z-40">
+                            <div className="h-20 bg-white/20 backdrop-blur-2xl rounded-3xl border border-white/20 flex items-center justify-around px-2 shadow-lg">
 
-                            {/* Bottom Chat Input Bar */}
-                            <div className="absolute bottom-0 left-0 right-0 bg-white z-50 rounded-t-[2rem] shadow-[0_-5px_30px_rgba(0,0,0,0.08)] p-4 pb-6 animate-fade-in-up">
-                                {/* Media Staging Preview */}
-                                {pendingMedia && (
-                                    <div className="flex px-4 mb-4 animate-scale-in">
-                                        <div className="relative group">
-                                            <div className="w-20 h-20 rounded-xl overflow-hidden border-2 border-indigo-400 shadow-md">
-                                                {pendingMedia.type === 'image' ? (
-                                                    <img src={pendingMedia.url} className="w-full h-full object-cover" />
-                                                ) : (
-                                                    <div className="w-full h-full bg-slate-800 flex items-center justify-center">
-                                                        <Box className="text-white/50" />
-                                                    </div>
-                                                )}
-                                            </div>
-                                            <button
-                                                onClick={() => setPendingMedia(null)}
-                                                className="absolute -top-2 -right-2 w-6 h-6 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-lg border-2 border-white active:scale-90 transition-transform"
-                                            >
-                                                <span className="text-lg leading-none">×</span>
-                                            </button>
-                                        </div>
-                                        <div className="ml-3 flex flex-col justify-center">
-                                            <span className="text-xs font-bold text-indigo-600">已准备好发送</span>
-                                            <span className="text-[10px] text-slate-400">点击发送按钮一起发出</span>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Upload Menu */}
-                                {showUploadMenu && (
-                                    <div className="flex gap-6 mb-6 px-4 justify-around animate-fade-in">
-                                        <input
-                                            type="file"
-                                            ref={imageInputRef}
-                                            className="hidden"
-                                            accept="image/*"
-                                            onChange={(e) => handleFileUpload(e, 'image')}
-                                        />
-                                        <input
-                                            type="file"
-                                            ref={videoInputRef}
-                                            className="hidden"
-                                            accept="video/*"
-                                            onChange={(e) => handleFileUpload(e, 'video')}
-                                        />
-                                        <button onClick={() => imageInputRef.current?.click()} className="flex flex-col items-center gap-2 group">
-                                            <div className="w-14 h-14 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-500 group-active:scale-95 transition-transform shadow-sm border border-indigo-100">
-                                                <ImageIcon size={24} />
-                                            </div>
-                                            <span className="text-xs font-bold text-slate-600">图片</span>
-                                        </button>
-                                        <button onClick={() => videoInputRef.current?.click()} className="flex flex-col items-center gap-2 group">
-                                            <div className="w-14 h-14 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-500 group-active:scale-95 transition-transform shadow-sm border border-rose-100">
-                                                <Camera size={24} />
-                                            </div>
-                                            <span className="text-xs font-bold text-slate-600">视频</span>
-                                        </button>
-                                    </div>
-                                )}
-
-                                <div className="flex items-center gap-2 max-w-full">
-                                    {/* Legacy Button - Restored */}
-                                    <button
-                                        onClick={() => {
-                                            setAiMessage("张爷爷，好的，让我们一起翻翻老照片。");
-                                            setIsTalking(true);
-                                            setTimeout(() => setIsTalking(false), 2000);
+                                <button
+                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
+                                    onClick={() => {
+                                        setAiMessage("好的，让我们一起翻翻老照片。");
+                                        setIsTalking(true);
+                                        setTimeout(() => {
+                                            setIsTalking(false);
                                             setActiveScenario('memory');
-                                            setStep(0);
-                                        }}
-                                        className="w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 shrink-0 bg-yellow-50 text-yellow-600 border border-yellow-100"
-                                    >
-                                        <ImageIcon size={18} />
-                                    </button>
-
-                                    <button
-                                        onClick={() => setShowUploadMenu(!showUploadMenu)}
-                                        className={`w-10 h-10 rounded-full flex items-center justify-center transition-all active:scale-95 shrink-0 ${showUploadMenu ? 'bg-slate-200 text-slate-600 rotate-45' : 'bg-slate-50 text-slate-500 border border-slate-100'}`}
-                                    >
-                                        <Box size={20} />
-                                    </button>
-
-                                    <div className="flex-1 bg-slate-50 rounded-2xl min-h-[44px] flex items-center px-3 py-2 border border-slate-200 focus-within:border-indigo-300 transition-colors gap-2 min-w-0">
-                                        <input
-                                            type="text"
-                                            value={inputText}
-                                            onChange={(e) => setInputText(e.target.value)}
-                                            placeholder="想聊点什么？..."
-                                            className="flex-1 bg-transparent border-none outline-none text-sm text-slate-800 placeholder:text-slate-400 min-w-0"
-                                            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                                        />
-                                        {/* Voice Input (Dictation) Button */}
-                                        <button
-                                            onClick={() => {
-                                                if (isDictating) {
-                                                    webSpeechService.stop();
-                                                    setIsDictating(false);
-                                                } else {
-                                                    setIsDictating(true);
-                                                    webSpeechService.start(({ transcript, isFinal }) => {
-                                                        setInputText(transcript); // Fill input
-                                                        if (isFinal) {
-                                                            setIsDictating(false);
-                                                        }
-                                                    });
-                                                }
-                                            }}
-                                            className={`w-8 h-8 flex items-center justify-center rounded-full transition-all flex-shrink-0 ${isDictating ? 'text-rose-500 bg-rose-50 animate-pulse' : 'text-slate-400 hover:text-indigo-500'}`}
-                                            title="语音转文字"
-                                        >
-                                            <Mic size={16} />
-                                        </button>
+                                        }, 800);
+                                    }}
+                                >
+                                    <div className="w-10 h-10 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-indigo-500/50 transition-all">
+                                        <ImageIcon size={20} className="text-white" />
                                     </div>
+                                    <span className="text-[10px] font-medium opacity-80">相册</span>
+                                </button>
 
+                                <div className="flex items-center justify-center">
                                     <button
                                         onClick={toggleRecording}
-                                        className={`w-11 h-11 rounded-full flex items-center justify-center text-white shadow-lg transition-all active:scale-90 shrink-0 ${isRecording ? 'bg-rose-500 animate-pulse' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                                        className={`w-16 h-16 rounded-full shadow-2xl flex items-center justify-center text-white border-4 border-slate-900 transition-all duration-300 ${isRecording
+                                            ? 'bg-gradient-to-br from-red-500 to-rose-600 scale-110 animate-pulse'
+                                            : 'bg-gradient-to-br from-indigo-600 to-violet-600'
+                                            }`}
                                     >
-                                        <Mic size={22} />
+                                        {isRecording ? (
+                                            <div className="flex gap-1">
+                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce"></div>
+                                                <div className="w-1 h-5 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                                                <div className="w-1 h-3 bg-white rounded-full animate-bounce" style={{ animationDelay: '75ms' }}></div>
+                                            </div>
+                                        ) : <Mic size={28} />}
                                     </button>
                                 </div>
+
+                                <button
+                                    className="flex flex-col items-center gap-1 p-2 text-white/90 hover:scale-110 transition-all active:scale-95 group"
+                                    onClick={() => medicationService.simulateReminder()}
+                                >
+                                    <div className="w-10 h-10 bg-emerald-500 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-emerald-500/50 transition-all">
+                                        <Pill size={20} className="text-white" />
+                                    </div>
+                                    <span className="text-[10px] font-medium opacity-80">服药</span>
+                                </button>
+
                             </div>
-                        </>
+                        </div>
                     )}
 
                 </div> {/* Close HomeScreen */}
@@ -1695,10 +1626,26 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 )}
 
                 {/* AR实景导航叠加层 */}
-
+                <ARNavigationOverlay
+                    isActive={arModeActive}
+                    steps={routeData?.steps || []}
+                    destination={navDestination}
+                    onClose={() => {
+                        setArModeActive(false);
+                        setActiveScenario('none');
+                    }}
+                />
 
                 {/* 游荡警报 */}
                 <WanderingAlert
+                    onNavigateHome={() => {
+                        // 导航回家
+                        mapService.planWalkingRoute('当前位置', '家').then(route => {
+                            setRouteData(route);
+                            setNavDestination('家');
+                            setActiveScenario('nav');
+                        });
+                    }}
                     onCallFamily={() => {
                         setAiMessage('正在联系您的家人...');
                         setIsTalking(true);
@@ -1716,10 +1663,21 @@ const ElderlyApp: React.FC<ElderlyAppProps> = ({ status, simulation }) => {
                 />
 
                 {/* 认知报告 */}
-
+                <CognitiveReport
+                    isOpen={showCognitiveReport}
+                    onClose={() => setShowCognitiveReport(false)}
+                />
 
                 {/* 认知报告入口按钮 - 右上角 */}
-
+                {activeScenario === 'none' && (
+                    <button
+                        onClick={() => setShowCognitiveReport(true)}
+                        className="absolute top-16 right-6 w-10 h-10 bg-purple-500/20 backdrop-blur-sm rounded-full flex items-center justify-center z-20 hover:bg-purple-500/30 transition-colors"
+                        title="查看认知报告"
+                    >
+                        <Brain size={20} className="text-purple-600" />
+                    </button>
+                )}
 
             </div>
 
