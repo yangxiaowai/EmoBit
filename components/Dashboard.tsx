@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { SimulationType, SystemStatus, LogEntry, DashboardTab } from '../types';
+import AvatarStatus3D from './AvatarStatus3D';
 import { VoiceService, AvatarService } from '../services/api';
 import { aiService } from '../services/aiService';
 import { voiceSelectionService } from '../services/voiceSelectionService';
@@ -455,7 +456,6 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     const environmentAnalysisReqIdRef = useRef(0);
 
     const statusColor = status === SystemStatus.CRITICAL ? 'rose' : status === SystemStatus.WARNING ? 'amber' : 'emerald';
-    const StatusIcon = status === SystemStatus.CRITICAL ? AlertTriangle : status === SystemStatus.WARNING ? MapPin : ShieldCheck;
 
     // Clock & Greeting
     useEffect(() => {
@@ -1410,36 +1410,42 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                 </div>
             </div>
 
-            {/* Hero Status Card (Premium Gradient) */}
-            <div className={`relative overflow-hidden rounded-[2.5rem] p-8 shadow-xl transition-all duration-500 group ${status === SystemStatus.CRITICAL ? 'bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200' :
+            {/* 3D 老年数字人 Hero 状态卡片 - 尽量占满模块 */}
+            <div className={`relative overflow-hidden rounded-[2.5rem] p-4 shadow-xl transition-all duration-700 group flex flex-col items-center ${
+                status === SystemStatus.CRITICAL ? 'bg-gradient-to-br from-rose-500 to-red-600 shadow-rose-200' :
                 status === SystemStatus.WARNING ? 'bg-gradient-to-br from-amber-400 to-orange-500 shadow-orange-200' :
-                    'bg-gradient-to-br from-[#6366f1] via-[#8b5cf6] to-[#d946ef] shadow-indigo-200'
+                'bg-white border border-slate-100 shadow-lg shadow-slate-100'
+            }`}>
+                {/* 状态角标 - 左上角 */}
+                <div className={`absolute top-4 left-4 z-20 flex items-center gap-2 pl-2 pr-3 py-1.5 rounded-full shadow-sm ${
+                    status === SystemStatus.NORMAL ? 'bg-slate-50 border border-slate-100' : 'bg-white/20 backdrop-blur-md border border-white/30'
                 }`}>
-                {/* Abstract Background Shapes */}
-                <div className="absolute top-0 right-0 -mr-12 -mt-12 w-64 h-64 bg-white opacity-10 rounded-full blur-3xl group-hover:scale-110 transition-transform duration-1000"></div>
-                <div className="absolute bottom-0 left-0 -ml-12 -mb-12 w-48 h-48 bg-black opacity-10 rounded-full blur-3xl"></div>
-
-                <div className="relative z-10 flex flex-col items-center text-center text-white">
-                    <div className={`w-20 h-20 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-5 border border-white/30 ${status === SystemStatus.CRITICAL ? 'animate-ping-slow' : 'shadow-[0_0_40px_rgba(255,255,255,0.3)]'}`}>
-                        <StatusIcon size={36} strokeWidth={1.5} className="drop-shadow-lg" />
+                    <div className="relative flex items-center justify-center w-5 h-5">
+                        <span className={`absolute inline-flex h-full w-full rounded-full opacity-75 animate-ping ${status === SystemStatus.NORMAL ? 'bg-emerald-500' : 'bg-emerald-400'}`}></span>
+                        <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${status === SystemStatus.NORMAL ? 'bg-emerald-500' : 'bg-emerald-500'}`}></span>
                     </div>
-                    <h3 className="text-3xl font-bold tracking-tight mb-2">
-                        {status === SystemStatus.NORMAL ? 'AI 实时守护中' : status === SystemStatus.WARNING ? '位置异常提醒' : '紧急跌倒警报'}
-                    </h3>
-                    <p className="text-white/90 text-sm font-medium mb-8 max-w-[240px] leading-relaxed opacity-90">
-                        {status === SystemStatus.NORMAL ? '系统运行正常。所有生命体征监测指标均在安全范围内。' : status === SystemStatus.WARNING ? '检测到用户离开了常驻安全区域，建议确认位置。' : '检测到剧烈撞击或跌倒，正在尝试联系紧急联系人。'}
-                    </p>
+                    <span className={`text-xs font-bold tracking-widest ${status === SystemStatus.NORMAL ? 'text-slate-600' : 'text-white text-shadow-sm'}`}>实时守护中</span>
+                </div>
 
-                    {/* Glass Stats Pills */}
-                    <div className="grid grid-cols-2 gap-3 w-full">
-                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 flex flex-col items-center hover:bg-white/20 transition-colors cursor-pointer">
-                            <span className="text-[10px] text-white/70 uppercase font-bold tracking-wider mb-0.5">安全评分</span>
-                            <span className="text-xl font-bold">98</span>
+                <div className={`absolute top-0 right-0 -mr-12 -mt-12 w-64 h-64 opacity-5 rounded-full blur-3xl ${status === SystemStatus.NORMAL ? 'bg-indigo-500' : 'bg-white'}`}></div>
+
+                {/* 3D 数字人容器：尽量占满模块，居中显示 */}
+                <div className="relative z-10 w-full min-h-[260px] flex items-center justify-center overflow-hidden py-2">
+                    <div className="relative w-full max-w-[300px] aspect-square flex items-center justify-center mx-auto">
+                        <div className={`absolute inset-0 rounded-full blur-2xl animate-pulse ${status === SystemStatus.NORMAL ? 'bg-slate-100' : 'bg-white/5'}`}></div>
+                        <div className={`absolute inset-0 rounded-full backdrop-blur-sm border ${status === SystemStatus.NORMAL ? 'bg-white/50 border-slate-100' : 'bg-gradient-to-tr from-white/10 to-transparent border-white/10'}`}></div>
+                        <div className={`absolute inset-1 border-2 border-dashed rounded-full animate-spin-slow opacity-60 ${status === SystemStatus.NORMAL ? 'border-indigo-200/50' : 'border-white/40'}`}></div>
+                        <div className={`absolute inset-2 rounded-full border overflow-hidden flex items-center justify-center ${
+                            status === SystemStatus.NORMAL ? 'bg-slate-50 border-white shadow-[inset_0_4px_20px_rgba(0,0,0,0.05)]' : 'bg-gradient-to-b from-white/20 to-white/5 border-white/30'
+                        }`}>
+                            <AvatarStatus3D status={status} size={260} />
                         </div>
-                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/20 flex flex-col items-center hover:bg-white/20 transition-colors cursor-pointer">
-                            <span className="text-[10px] text-white/70 uppercase font-bold tracking-wider mb-0.5">设备电量</span>
-                            <span className="text-xl font-bold flex items-center gap-1"><Battery size={14} className="fill-white" /> 84%</span>
-                        </div>
+
+                        {status !== SystemStatus.NORMAL && (
+                            <div className="absolute top-1 right-1 bg-white rounded-full p-1.5 shadow-lg border-2 border-red-500 z-30">
+                                <AlertTriangle size={18} className="text-red-600 animate-pulse" />
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
