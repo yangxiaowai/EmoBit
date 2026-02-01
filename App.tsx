@@ -58,13 +58,6 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen w-full bg-slate-50 overflow-hidden font-sans text-slate-900">
-      {/* Sidebar Control Panel */}
-      <Sidebar 
-        currentSimulation={simulation} 
-        onSimulate={handleSimulate} 
-        logs={logs}
-      />
-
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full relative overflow-hidden transition-all duration-300">
         

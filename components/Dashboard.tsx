@@ -6,7 +6,7 @@ import { VoiceService, AvatarService } from '../services/api';
 import { aiService } from '../services/aiService';
 import { voiceSelectionService } from '../services/voiceSelectionService';
 import { blobToWav, getAudioDurationSeconds } from '../utils/audioUtils';
-import { healthStateService, HealthMetrics } from '../services/healthStateService';
+import { healthStateService, HealthMetrics, HEALTHY_VITALS, SUBHEALTHY_VITALS } from '../services/healthStateService';
 import { mapService } from '../services/mapService';
 import { medicationService, Medication } from '../services/medicationService';
 import { faceService, FaceData } from '../services/faceService';
@@ -141,29 +141,6 @@ const LocationTabContent: React.FC<LocationTabContentProps> = ({
                             <div className="w-1.5 h-1.5 rounded-full bg-slate-400"></div> 历史轨迹
                         </div>
                     </div>
-                </div>
-                <div className="absolute top-4 right-4 z-[400] flex flex-col gap-2">
-                    <button
-                        onClick={simulateNormalPath}
-                        disabled={trajectoryLoading}
-                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
-                    >
-                        {trajectoryLoading ? '生成中…' : '🏠 模拟: 正常轨迹 (12h)'}
-                    </button>
-                    <button
-                        onClick={simulateLostPath}
-                        disabled={trajectoryLoading}
-                        className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left"
-                    >
-                        {trajectoryLoading ? '生成中…' : '⚠️ 模拟: 疑似走失 (12h)'}
-                    </button>
-                    <button
-                        onClick={resetToCurrentLocation}
-                        disabled={historyData.length === 0}
-                        className="px-3 py-1.5 bg-slate-500 hover:bg-slate-600 disabled:opacity-50 text-white text-[10px] font-bold rounded-lg shadow-sm active:scale-95 transition-all text-left flex items-center gap-1"
-                    >
-                        <ArrowLeft size={12} /> 返回当前位置
-                    </button>
                 </div>
                 <div className="absolute bottom-4 left-4 right-4 z-[400] bg-white/95 backdrop-blur-md p-3 rounded-xl shadow-lg border border-slate-200/60">
                     <div className="flex items-center gap-3 mb-1">
@@ -456,6 +433,23 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     const environmentAnalysisReqIdRef = useRef(0);
 
     const statusColor = status === SystemStatus.CRITICAL ? 'rose' : status === SystemStatus.WARNING ? 'amber' : 'emerald';
+
+    // 健康数据状态管理：默认使用健康生命体征预设
+    const [avatarState, setAvatarState] = useState<AvatarState>(healthStateService.getAvatarState());
+    const [currentMetrics, setCurrentMetrics] = useState<HealthMetrics>({ ...HEALTHY_VITALS });
+    const [activePreset, setActivePreset] = useState<'healthy' | 'subhealthy'>('healthy');
+
+    // 订阅健康状态变化
+    useEffect(() => {
+        const unsubscribe = healthStateService.subscribe((state) => {
+            setAvatarState(state);
+        });
+        
+        // 初始化数据
+        healthStateService.updateMetrics(currentMetrics);
+        
+        return unsubscribe;
+    }, []);
 
     // Clock & Greeting
     useEffect(() => {
@@ -1438,7 +1432,7 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                         <div className={`absolute inset-2 rounded-full border overflow-hidden flex items-center justify-center ${
                             status === SystemStatus.NORMAL ? 'bg-slate-50 border-white shadow-[inset_0_4px_20px_rgba(0,0,0,0.05)]' : 'bg-gradient-to-b from-white/20 to-white/5 border-white/30'
                         }`}>
-                            <AvatarStatus3D status={status} size={260} />
+                            <AvatarStatus3D status={status} healthState={avatarState} size={260} />
                         </div>
 
                         {status !== SystemStatus.NORMAL && (
@@ -1460,13 +1454,16 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                     {/* Heart Rate Card */}
                     <div className="bg-white p-5 rounded-[2rem] shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] border border-slate-50 relative overflow-hidden group hover:shadow-lg transition-all active:scale-95" onClick={() => setActiveTab('health')}>
                         <div className="flex justify-between items-start mb-2 relative z-20">
-                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">平均心率</span>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mt-1">实时心率</span>
                             <div className="bg-rose-50 p-2 rounded-full text-rose-500">
                                 <Heart size={16} fill="currentColor" />
                             </div>
                         </div>
                         <div className="relative z-20">
-                            <p className="text-3xl font-bold text-slate-800">75 <span className="text-xs text-slate-400 font-medium uppercase">bpm</span></p>
+                            <p className={`text-3xl font-bold transition-colors ${
+                                currentMetrics.heartRate > 100 ? 'text-red-600' : 
+                                currentMetrics.heartRate < 60 ? 'text-blue-600' : 'text-slate-800'
+                            }`}>{currentMetrics.heartRate} <span className="text-xs text-slate-400 font-medium uppercase">bpm</span></p>
                         </div>
                         {/* Decorative Chart Line */}
                         <div className="absolute bottom-0 left-0 right-0 h-12 opacity-30 group-hover:scale-110 transition-transform origin-bottom text-rose-500 z-10 pointer-events-none">
@@ -1485,11 +1482,17 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                             </div>
                         </div>
                         <div className="relative z-20 mb-3">
-                            <p className="text-3xl font-bold text-slate-800">8.2<span className="text-sm text-slate-400 font-medium ml-1">h</span></p>
+                            <p className={`text-3xl font-bold transition-colors ${
+                                currentMetrics.sleepHours < 5 ? 'text-red-600' :
+                                currentMetrics.sleepHours < 6 ? 'text-orange-600' : 'text-slate-800'
+                            }`}>{currentMetrics.sleepHours.toFixed(1)}<span className="text-sm text-slate-400 font-medium ml-1">h</span></p>
                         </div>
                         {/* Simple Progress Bar */}
                         <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden relative z-20">
-                            <div className="w-[85%] h-full bg-gradient-to-r from-indigo-400 to-purple-400 rounded-full"></div>
+                            <div 
+                                className="h-full bg-gradient-to-r from-indigo-400 to-purple-400 rounded-full transition-all duration-500"
+                                style={{ width: `${Math.min((currentMetrics.sleepHours / 8) * 100, 100)}%` }}
+                            ></div>
                         </div>
                     </div>
 
@@ -1502,23 +1505,64 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                                 </div>
                                 <span className="text-[10px] font-bold uppercase tracking-wider">今日步数</span>
                             </div>
-                            <p className="text-4xl font-bold tracking-tight">3,240 <span className="text-lg text-slate-600 font-medium">/ 5000</span></p>
+                            <p className="text-4xl font-bold tracking-tight">{currentMetrics.steps.toLocaleString()} <span className="text-lg text-slate-600 font-medium">/ 5000</span></p>
                         </div>
 
                         {/* Ring Chart Simulation */}
                         <div className="relative w-24 h-24 flex items-center justify-center shrink-0">
                             <svg className="w-full h-full rotate-[-90deg]">
                                 <circle cx="48" cy="48" r="40" stroke="rgba(255,255,255,0.1)" strokeWidth="8" fill="none" />
-                                <circle cx="48" cy="48" r="40" stroke="#818cf8" strokeWidth="8" fill="none" strokeDasharray="251" strokeDashoffset="90" strokeLinecap="round" className="group-hover:stroke-indigo-400 transition-colors" />
+                                <circle 
+                                    cx="48" 
+                                    cy="48" 
+                                    r="40" 
+                                    stroke="#818cf8" 
+                                    strokeWidth="8" 
+                                    fill="none" 
+                                    strokeDasharray="251" 
+                                    strokeDashoffset={251 - (currentMetrics.steps / 5000) * 251}
+                                    strokeLinecap="round" 
+                                    className="group-hover:stroke-indigo-400 transition-all duration-500" 
+                                />
                             </svg>
                             <div className="absolute inset-0 flex flex-col items-center justify-center">
-                                <span className="font-bold text-sm">64%</span>
+                                <span className="font-bold text-sm">{Math.round((currentMetrics.steps / 5000) * 100)}%</span>
                                 <span className="text-[8px] text-slate-400 uppercase">Goal</span>
                             </div>
                         </div>
 
                         {/* Decorative Blob */}
                         <div className="absolute -left-10 -bottom-10 w-40 h-40 bg-indigo-500 opacity-20 blur-3xl rounded-full"></div>
+                    </div>
+
+                    {/* 血压卡片 */}
+                    <div className="col-span-2 bg-white p-5 rounded-[2rem] shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] border border-slate-50 flex items-center justify-between">
+                        <div>
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">血压 (mmHg)</span>
+                            <p className={`text-2xl font-bold mt-1 transition-colors ${
+                                (currentMetrics.bloodPressure?.systolic ?? 120) >= 140 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 90
+                                    ? 'text-red-600'
+                                    : (currentMetrics.bloodPressure?.systolic ?? 120) >= 130 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 85
+                                        ? 'text-orange-600'
+                                        : 'text-slate-800'
+                            }`}>
+                                {currentMetrics.bloodPressure?.systolic ?? '—'} / {currentMetrics.bloodPressure?.diastolic ?? '—'}
+                            </p>
+                            <p className="text-xs text-slate-400 mt-1">收缩压 / 舒张压</p>
+                        </div>
+                        <div className={`px-3 py-1.5 rounded-full text-xs font-bold ${
+                            (currentMetrics.bloodPressure?.systolic ?? 120) >= 140 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 90
+                                ? 'bg-red-100 text-red-700'
+                                : (currentMetrics.bloodPressure?.systolic ?? 120) >= 130 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 85
+                                    ? 'bg-orange-100 text-orange-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                        }`}>
+                            {(currentMetrics.bloodPressure?.systolic ?? 120) >= 140 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 90
+                                ? '偏高'
+                                : (currentMetrics.bloodPressure?.systolic ?? 120) >= 130 || (currentMetrics.bloodPressure?.diastolic ?? 80) >= 85
+                                    ? '临界'
+                                    : '正常'}
+                        </div>
                     </div>
 
                     {/* Section Header */}
@@ -1962,9 +2006,9 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
     // --- Main Render ---
 
     return (
-        <div className="flex items-center justify-center h-full py-8">
+        <div className="flex items-center justify-center h-full py-8 gap-6 flex-wrap px-4">
             {/* Phone Frame */}
-            <div className="relative w-[360px] h-[720px] bg-black rounded-[3rem] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] border-[8px] border-slate-800 overflow-hidden ring-1 ring-slate-900/5 select-none flex flex-col">
+            <div className="relative w-[360px] h-[720px] bg-black rounded-[3rem] shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5)] border-[8px] border-slate-800 overflow-hidden ring-1 ring-slate-900/5 select-none flex flex-col shrink-0">
 
                 {/* Main Content Area - Updated: Removed Status Bar, Added pt-8 to clear corners */}
                 <div className="flex-1 bg-[#F8FAFC] overflow-y-auto no-scrollbar relative pt-8">
@@ -2058,6 +2102,173 @@ const Dashboard: React.FC<DashboardProps> = ({ status, simulation, logs }) => {
                         <button className="bg-white/20 px-3 py-1 rounded-full text-[10px]">立即处理 &gt;</button>
                     </div>
                 )}
+            </div>
+
+            {/* 统一模拟控制面板（手机屏外：定位轨迹 + 健康数据） */}
+            <div className="w-[320px] max-h-[720px] overflow-y-auto rounded-2xl bg-slate-50 border border-slate-200 shadow-lg p-4 shrink-0 space-y-6">
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                    <MapPin size={14} /> 定位轨迹模拟
+                </h3>
+                <div className="flex flex-col gap-2">
+                    <button
+                        onClick={simulateNormalPath}
+                        disabled={trajectoryLoading}
+                        className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white text-xs font-bold rounded-xl shadow-sm active:scale-95 transition-all text-left"
+                    >
+                        {trajectoryLoading ? '生成中…' : '🏠 模拟: 正常轨迹 (12h)'}
+                    </button>
+                    <button
+                        onClick={simulateLostPath}
+                        disabled={trajectoryLoading}
+                        className="px-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-60 text-white text-xs font-bold rounded-xl shadow-sm active:scale-95 transition-all text-left"
+                    >
+                        {trajectoryLoading ? '生成中…' : '⚠️ 模拟: 疑似走失 (12h)'}
+                    </button>
+                    <button
+                        onClick={resetToCurrentLocation}
+                        disabled={historyData.length === 0}
+                        className="px-4 py-2.5 bg-slate-500 hover:bg-slate-600 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-sm active:scale-95 transition-all text-left flex items-center gap-2"
+                    >
+                        <ArrowLeft size={14} /> 返回当前位置
+                    </button>
+                </div>
+
+                <h3 className="text-sm font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2 pt-2 border-t border-slate-200">
+                    <Activity size={14} /> 健康数据模拟
+                </h3>
+                <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl p-4 border border-indigo-100 space-y-4">
+                    <h4 className="text-xs font-bold text-indigo-900 flex items-center gap-2">生命体征预设</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button
+                            onClick={() => {
+                                const metrics = { ...HEALTHY_VITALS };
+                                setCurrentMetrics(metrics);
+                                setActivePreset('healthy');
+                                healthStateService.updateMetrics(metrics);
+                            }}
+                            className={`rounded-xl p-3 text-left transition-all border-2 text-xs ${
+                                activePreset === 'healthy'
+                                    ? 'bg-emerald-500 border-emerald-600 text-white shadow-lg'
+                                    : 'bg-white/80 border-slate-200 text-slate-700 hover:border-emerald-300'
+                            }`}
+                        >
+                            <span className="font-bold">✅ 健康</span>
+                            <p className="text-[10px] opacity-90 mt-0.5">心率 72 · 血氧 98% · 血压 118/76</p>
+                        </button>
+                        <button
+                            onClick={() => {
+                                const metrics = { ...SUBHEALTHY_VITALS };
+                                setCurrentMetrics(metrics);
+                                setActivePreset('subhealthy');
+                                healthStateService.updateMetrics(metrics);
+                            }}
+                            className={`rounded-xl p-3 text-left transition-all border-2 text-xs ${
+                                activePreset === 'subhealthy'
+                                    ? 'bg-amber-500 border-amber-600 text-white shadow-lg'
+                                    : 'bg-white/80 border-slate-200 text-slate-700 hover:border-amber-300'
+                            }`}
+                        >
+                            <span className="font-bold">⚠️ 亚健康</span>
+                            <p className="text-[10px] opacity-90 mt-0.5">心率 88 · 血氧 94% · 血压 152/98</p>
+                        </button>
+                    </div>
+                    <h4 className="text-xs font-bold text-slate-600 mb-2">微调指标</h4>
+                    <div className="space-y-3">
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">心率</span>
+                                <span className={`text-sm font-bold ${currentMetrics.heartRate > 100 ? 'text-red-600' : currentMetrics.heartRate < 60 ? 'text-blue-600' : 'text-green-600'}`}>{currentMetrics.heartRate}</span>
+                            </div>
+                            <input type="range" min="50" max="130" value={currentMetrics.heartRate}
+                                onChange={(e) => { const v = { ...currentMetrics, heartRate: parseInt(e.target.value) }; setCurrentMetrics(v); healthStateService.updateMetrics(v); }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">血氧</span>
+                                <span className={`text-sm font-bold ${currentMetrics.bloodOxygen < 90 ? 'text-red-600' : currentMetrics.bloodOxygen < 95 ? 'text-orange-600' : 'text-green-600'}`}>{currentMetrics.bloodOxygen}%</span>
+                            </div>
+                            <input type="range" min="85" max="100" value={currentMetrics.bloodOxygen}
+                                onChange={(e) => { const v = { ...currentMetrics, bloodOxygen: parseInt(e.target.value) }; setCurrentMetrics(v); healthStateService.updateMetrics(v); }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">睡眠(h)</span>
+                                <span className={`text-sm font-bold ${currentMetrics.sleepHours < 5 ? 'text-red-600' : currentMetrics.sleepHours < 6 ? 'text-orange-600' : 'text-green-600'}`}>{currentMetrics.sleepHours.toFixed(1)}</span>
+                            </div>
+                            <input type="range" min="2" max="12" step="0.5" value={currentMetrics.sleepHours}
+                                onChange={(e) => { const v = { ...currentMetrics, sleepHours: parseFloat(e.target.value) }; setCurrentMetrics(v); healthStateService.updateMetrics(v); }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">步数</span>
+                                <span className={`text-sm font-bold ${currentMetrics.steps < 2000 ? 'text-orange-600' : 'text-green-600'}`}>{currentMetrics.steps.toLocaleString()}</span>
+                            </div>
+                            <input type="range" min="0" max="10000" step="100" value={currentMetrics.steps}
+                                onChange={(e) => { const v = { ...currentMetrics, steps: parseInt(e.target.value) }; setCurrentMetrics(v); healthStateService.updateMetrics(v); }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">收缩压 (mmHg)</span>
+                                <span className={`text-sm font-bold ${
+                                    (currentMetrics.bloodPressure?.systolic ?? 120) >= 140 ? 'text-red-600' :
+                                    (currentMetrics.bloodPressure?.systolic ?? 120) >= 130 ? 'text-orange-600' : 'text-green-600'
+                                }`}>{currentMetrics.bloodPressure?.systolic ?? 120}</span>
+                            </div>
+                            <input type="range" min="80" max="200" step="1" value={currentMetrics.bloodPressure?.systolic ?? 120}
+                                onChange={(e) => {
+                                    const v = { ...currentMetrics, bloodPressure: { systolic: parseInt(e.target.value), diastolic: currentMetrics.bloodPressure?.diastolic ?? 80 } };
+                                    setCurrentMetrics(v);
+                                    healthStateService.updateMetrics(v);
+                                }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                            <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+                                <span>80</span>
+                                <span>正常 120</span>
+                                <span>200</span>
+                            </div>
+                        </div>
+                        <div className="bg-white/70 rounded-lg p-2">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-700">舒张压 (mmHg)</span>
+                                <span className={`text-sm font-bold ${
+                                    (currentMetrics.bloodPressure?.diastolic ?? 80) >= 90 ? 'text-red-600' :
+                                    (currentMetrics.bloodPressure?.diastolic ?? 80) >= 85 ? 'text-orange-600' : 'text-green-600'
+                                }`}>{currentMetrics.bloodPressure?.diastolic ?? 80}</span>
+                            </div>
+                            <input type="range" min="50" max="130" step="1" value={currentMetrics.bloodPressure?.diastolic ?? 80}
+                                onChange={(e) => {
+                                    const v = { ...currentMetrics, bloodPressure: { systolic: currentMetrics.bloodPressure?.systolic ?? 120, diastolic: parseInt(e.target.value) } };
+                                    setCurrentMetrics(v);
+                                    healthStateService.updateMetrics(v);
+                                }}
+                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600" />
+                            <div className="flex justify-between text-[9px] text-slate-500 mt-0.5">
+                                <span>50</span>
+                                <span>正常 80</span>
+                                <span>130</span>
+                            </div>
+                        </div>
+                    </div>
+                    {avatarState.message && (
+                        <div className={`rounded-lg p-2 text-xs ${
+                            avatarState.alertLevel === 'critical' ? 'bg-red-100 border border-red-300' :
+                            avatarState.alertLevel === 'warning' ? 'bg-orange-100 border border-orange-300' :
+                            avatarState.alertLevel === 'attention' ? 'bg-yellow-100 border border-yellow-300' :
+                            'bg-green-100 border border-green-300'
+                        }`}>
+                            <span className="font-bold text-slate-700">3D 小人：</span>
+                            <span className="text-slate-600">{avatarState.message}</span>
+                            <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                                <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">心情: {avatarState.mood === 'happy' ? '开心' : avatarState.mood === 'calm' ? '平静' : avatarState.mood === 'tired' ? '疲惫' : avatarState.mood === 'worried' ? '担忧' : '困倦'}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800">精力: {Math.round(avatarState.energy)}%</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
             </div>
 
             <style>{`
